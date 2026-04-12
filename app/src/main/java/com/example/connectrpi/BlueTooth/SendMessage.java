@@ -19,7 +19,7 @@ public class SendMessage {
     public SendMessage(MainActivity activity, OutputStream os, EditText et, boolean isConnected) {
         this.activity = activity;
         this.os = os;
-        this.et = et;
+        this.SendMessage = SendMessage;
         this.isConnected = isConnected;
     }
 
