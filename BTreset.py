@@ -39,6 +39,3 @@ def reset_bluetooth_communication():
     except Exception as e:
         print(f"Failed to reset Bluetooth: {e}")
         return False
-
-if __name__ == "__main__":
-    reset_bluetooth_communication()

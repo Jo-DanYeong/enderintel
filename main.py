@@ -1,4 +1,5 @@
 import socket, os
+import BTreset
 
 # 1. Initialize Bluetooth socket
 # AF_BLUETOOTH: Bluetooth address family
@@ -7,6 +8,7 @@ import socket, os
 
 
 server_socket = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
+BTreset.reset_bluetooth_communication()#btl socket reset
 
 try:
     # 2. Bind to any available address and port 1
@@ -28,13 +30,18 @@ try:
  
         # 5. Decode received data to string
         message = data.decode('utf-8').strip()  
+        response = "Undefined Value"
         print(f"Received: {message}")
 
-        if message == "qwer":
-            response = "Server received : 인정할게여"
-            client_socket.send(response.encode('utf-8'))
+        if message == "ping":
+            response = "pong"
 
-        # 6. Echo back the received message
+        elif message == "":
+            response = "no value"
+
+        else:
+            response = "undefine Message"
+        client_socket.send(response.encode('utf-8'))
         
 
 except Exception as e:
