@@ -31,6 +31,8 @@ def reset_bluetooth_communication():
         # 4. Power Up and Re-enable Visibility
         print("Powering on and restoring visibility...")
         run_cmd(["bluetoothctl", "power", "on"])
+        run_cmd(["bluetoothctl", "agent", "NoInputNoOutput"])
+        run_cmd(["bluetoothctl", "default-agent"])
         run_cmd(["bluetoothctl", "discoverable", "on"])
         run_cmd(["bluetoothctl", "pairable", "on"])
         
