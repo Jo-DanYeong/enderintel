@@ -1,10 +1,9 @@
 package com.example.connectrpi.BlueTooth;
 
 import android.annotation.SuppressLint;
+import android.util.Log;
 import android.widget.TextView;
-
 import com.example.connectrpi.MainActivity;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -12,13 +11,13 @@ import java.nio.charset.StandardCharsets;
 public class ReceiveData {
     private final MainActivity activity;
     private final InputStream is;
-    private final TextView ServerMsg;
+    private final TextView receiveText;
     private boolean isRunning;
 
-    public ReceiveData(MainActivity activity, InputStream is, TextView ServerMsg) {
+    public ReceiveData(MainActivity activity, InputStream is, TextView receiveText) {
         this.activity = activity;
         this.is = is;
-        this.ServerMsg = ServerMsg;
+        this.receiveText = receiveText;
     }
 
     @SuppressLint("SetTextI18n")
@@ -28,17 +27,17 @@ public class ReceiveData {
             byte[] buffer = new byte[1024];
             while (isRunning && !Thread.currentThread().isInterrupted()) {
                 try {
-                    // 데이터가 있을 때만 읽기 시도
-                    if (is != null && is.available() > 0) {
-                        int bytesRead = is.read(buffer);
-                        if (bytesRead > 0) {
-                            String data = new String(buffer, 0, bytesRead, StandardCharsets.UTF_8);
-                            activity.runOnUiThread(() -> ServerMsg.setText(data));
-                        }
+                    int bytesRead = is.read(buffer);
+
+                    if (bytesRead > 0) {
+                        String data = new String(buffer, 0, bytesRead, StandardCharsets.UTF_8);
+                        activity.runOnUiThread(() -> receiveText.append("RPi: " + data + "\n"));
+                    } else if (bytesRead == -1) {
+                        // 스트림이 닫힌 경우
+                        break;
                     }
-                    // CPU 과부하 방지 및 노트북 다운 방지 (중요!)
-                    Thread.sleep(10);
-                } catch (IOException | InterruptedException e) {
+                } catch (IOException e) {
+                    Log.e("BT_LOG", "수신 오류 및 종료", e);
                     isRunning = false;
                     break;
                 }
