@@ -46,4 +46,8 @@ public class ReceiveData {
             }
         }).start();
     }
+
+    public boolean isRunning(){
+        return isRunning;
+    }
 }
