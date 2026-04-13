@@ -38,6 +38,7 @@ public class ReceiveData {
                     }
                 } catch (IOException e) {
                     Log.e("BT_LOG", "수신 오류 및 종료", e);
+                    activity.runOnUiThread(() -> Toast.makeText(activity, "연결 종료 : 수신중 오류 발생", Toast.LENGTH_SHORT).show());
                     isRunning = false;
                     break;
                 }
