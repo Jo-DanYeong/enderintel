@@ -31,7 +31,7 @@ public class ReceiveData {
 
                     if (bytesRead > 0) {
                         String data = new String(buffer, 0, bytesRead, StandardCharsets.UTF_8);
-                        activity.runOnUiThread(() -> receiveText.append("RPi: " + data + "\n"));
+                        activity.runOnUiThread(() -> receiveText.setText(data + "\n"));
                     } else if (bytesRead == -1) {
                         // 스트림이 닫힌 경우
                         break;
