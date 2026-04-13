@@ -26,7 +26,7 @@ public class SendMessage {
     public void sendMessage() {
         // os가 null이거나 연결 상태가 false면 차단
         if (os == null || !isConnected) {
-            Toast.makeText(activity, "연결 상태를 확인하세요!",  Toast.LENGTH_SHORT).show();
+            Toast.makeText(activity, "먼저 연결해 주세요",  Toast.LENGTH_SHORT).show();
             return;
         }
 
