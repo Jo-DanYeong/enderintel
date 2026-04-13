@@ -32,9 +32,10 @@ try:
         message = data.decode('utf-8').strip()  
         response = "Undefined Value"
         print(f"Received: {message}")
-
-        if message == "ping":
-            response = "pong"
+        
+        if message == "shutdown":
+            response = "shutdown complete"
+            break
 
         elif message == "":
             response = "no value"
