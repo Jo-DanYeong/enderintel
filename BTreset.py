@@ -16,6 +16,7 @@ def reset_bluetooth_communication():
     try:
         # 1. Kill any existing bluetoothctl processes
         print("Cleaning up background processes...")
+        run_cmd(["sudo", "pkill", "blueman-applet"])
         run_cmd(["sudo", "pkill", "bluetoothctl"])
         
         # 2. Power Down
