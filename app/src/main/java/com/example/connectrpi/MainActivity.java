@@ -66,6 +66,14 @@ public class MainActivity extends AppCompatActivity {
             connector.connectToRaspberryPi();
         });
 
+        //블루투스 연결 해제
+        findViewById(R.id.disconnect_button).setOnClickListener(v ->{
+            BT_RPi connector = new BT_RPi(this, bluetoothAdapter, DEVICE_ADDRESS, BT_UUID, receiveText);
+            Status.setIsRunning(false);
+            connector.disconnectToRaspberryPi(outputStream);
+        });
+
+        //
         findViewById(R.id.Send_BTN).setOnClickListener(v -> {
             // 현재 소켓 상태를 확인하여 전달
             boolean isConnected = (bluetoothSocket != null && bluetoothSocket.isConnected());
