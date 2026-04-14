@@ -4,11 +4,12 @@ plugins {
 
 android {
     namespace = "com.example.connectrpi" // 본인의 패키지명 확인
-    compileSdk = 34 // 에러 났던 부분: 표준 숫자로 변경
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.example.connectrpi"
         minSdk = 26
+        //noinspection OldTargetApi
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
