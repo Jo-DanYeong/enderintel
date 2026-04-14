@@ -1,4 +1,5 @@
 <resources>
     <string name="app_name">ConnectRPi</string>
     <string name="hint_sendMessage">send message</string>
+    <string name="disconnect">연결 끊기</string>
 </resources>
