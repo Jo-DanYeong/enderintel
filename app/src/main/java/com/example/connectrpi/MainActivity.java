@@ -10,13 +10,13 @@ import android.os.Bundle;
 import android.util.Log;
 import android.widget.EditText;
 import android.widget.TextView;
-
+import android.widget.Toast;
 import androidx.annotation.RequiresApi;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
-
-import com.example.connectrpi.BlueTooth.ConnectToRPi;
+import com.example.connectrpi.BlueTooth.BT_RPi;
 import com.example.connectrpi.BlueTooth.SendMessage;
+import com.example.connectrpi.BlueTooth.Util.Status;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -83,8 +83,9 @@ public class MainActivity extends AppCompatActivity {
         //
         findViewById(R.id.Send_BTN).setOnClickListener(v -> {
             // 현재 소켓 상태를 확인하여 전달
-            boolean isConnected = (bluetoothSocket != null && bluetoothSocket.isConnected());
-            SendMessage sender = new SendMessage(this, outputStream, sendMessageField, isConnected);
+            Status.setIsRunning( (bluetoothSocket != null && bluetoothSocket.isConnected()) );
+
+            SendMessage sender = new SendMessage(this, outputStream, sendMessageField, Status.getIsRunning());
             sender.sendMessage();
         });
     }
