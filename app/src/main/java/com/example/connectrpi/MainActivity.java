@@ -60,10 +60,17 @@ public class MainActivity extends AppCompatActivity {
         sendMessageField = findViewById(R.id.send_Text);
         receiveText = findViewById(R.id.receiveText);
 
-        // 버튼 리스너
+        /* 버튼 리스너 */
+
+        //블루투스 연결
         findViewById(R.id.connect_button).setOnClickListener(v -> {
-            ConnectToRPi connector = new ConnectToRPi(this, bluetoothAdapter, DEVICE_ADDRESS, BT_UUID, receiveText);
-            connector.connectToRaspberryPi();
+            if (Status.getIsRunning()){
+                this.runOnUiThread(() -> Toast.makeText(this, "현재 연결이 되어있습니다.", Toast.LENGTH_SHORT).show());
+            }
+            else{
+                BT_RPi connector = new BT_RPi(this, bluetoothAdapter, DEVICE_ADDRESS, BT_UUID, receiveText);
+                connector.connectToRaspberryPi();
+            }
         });
 
         //블루투스 연결 해제
