@@ -33,10 +33,7 @@ public class SendMessage {
         new Thread(() -> {
             try {
                 String msg = SendMessage.getText().toString() + "\n";
-                os.write(msg.getBytes(StandardCharsets.UTF_8));
-                os.flush();
-                Log.d("BT_LOG", "전송 완료: " + msg);
-
+                MessageSend(os,msg);
                 activity.runOnUiThread(() -> SendMessage.setText(""));
             } catch (IOException e) {
                 Log.e("BT_LOG", "전송 실패", e);
