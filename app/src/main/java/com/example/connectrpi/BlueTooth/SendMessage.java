@@ -44,4 +44,9 @@ public class SendMessage {
             }
         }).start();
     }
+
+    public static void MessageSend(OutputStream os, String msg) throws IOException {
+        os.write(msg.getBytes(StandardCharsets.UTF_8));
+        os.flush();
+    }
 }
