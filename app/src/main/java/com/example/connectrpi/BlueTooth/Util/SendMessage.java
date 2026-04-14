@@ -1,4 +1,4 @@
-package com.example.connectrpi.BlueTooth;
+package com.example.connectrpi.BlueTooth.Util;
 
 import android.util.Log;
 import android.widget.EditText;

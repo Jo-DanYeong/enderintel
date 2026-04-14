@@ -1,10 +1,9 @@
-package com.example.connectrpi.BlueTooth;
+package com.example.connectrpi.BlueTooth.Util;
 
 import android.annotation.SuppressLint;
 import android.util.Log;
 import android.widget.TextView;
 import android.widget.Toast;
-import com.example.connectrpi.BlueTooth.Util.Status;
 import com.example.connectrpi.MainActivity;
 
 import java.io.IOException;

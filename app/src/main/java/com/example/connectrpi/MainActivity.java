@@ -15,7 +15,7 @@ import androidx.annotation.RequiresApi;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import com.example.connectrpi.BlueTooth.BT_RPi;
-import com.example.connectrpi.BlueTooth.SendMessage;
+import com.example.connectrpi.BlueTooth.Util.SendMessage;
 import com.example.connectrpi.BlueTooth.Util.Status;
 
 import java.io.IOException;

@@ -6,6 +6,8 @@ import android.bluetooth.BluetoothDevice;
 import android.util.Log;
 import android.widget.TextView;
 import android.widget.Toast;
+import com.example.connectrpi.BlueTooth.Util.ReceiveData;
+import com.example.connectrpi.BlueTooth.Util.SendMessage;
 import com.example.connectrpi.BlueTooth.Util.Status;
 import com.example.connectrpi.MainActivity;
 
