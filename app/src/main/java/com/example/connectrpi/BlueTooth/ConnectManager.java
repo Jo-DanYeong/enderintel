@@ -15,7 +15,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.util.UUID;
 
-public class BT_RPi {
+public class ConnectManager {
     private ReceiveData receiveData;
     private final MainActivity activity;
     private final BluetoothAdapter adapter;
@@ -23,7 +23,7 @@ public class BT_RPi {
     private final UUID uuid;
     private final TextView Receivedata;
 
-    public BT_RPi(MainActivity activity, BluetoothAdapter adapter, String address, UUID uuid, TextView Receivedata) {
+    public ConnectManager(MainActivity activity, BluetoothAdapter adapter, String address, UUID uuid, TextView Receivedata) {
         this.activity = activity;
         this.adapter = adapter;
         this.address = address;
@@ -64,14 +64,8 @@ public class BT_RPi {
     public void disconnectToRaspberryPi(OutputStream os){
         new Thread(() -> {
             try{
-                //만약 연결이 안돼있는 상태일때 실행 안하기
-                if (!Status.getIsRunning()){
-                    activity.runOnUiThread(() -> Toast.makeText(activity, "연결이 되어있지 않습니다.", Toast.LENGTH_SHORT).show());
-                    return;
-                }
-
                 //서버로 신호 보내기
-                SendMessage.MessageSend(os,"YzJoMWRHUnZkMjQ9");
+                SendMessage.MessageSend(os,"9d634e1a156dc0c1611eb4c3cff57276");
                 Log.d("BT_LOG", "연결 끊기 신호 보냄");
                 activity.runOnUiThread(() -> Toast.makeText(activity, "연결이 정상적으로 끊어졌습니다.", Toast.LENGTH_SHORT).show());
                 Status.setIsRunning(false);

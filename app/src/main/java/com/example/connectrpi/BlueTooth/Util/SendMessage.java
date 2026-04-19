@@ -1,0 +1,49 @@
+package com.example.connectrpi.BlueTooth.Util;
+
+import android.util.Log;
+import android.widget.EditText;
+import android.widget.Toast;
+
+import com.example.connectrpi.MainActivity;
+
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+
+public class SendMessage {
+    private final MainActivity activity;
+    private final OutputStream os;
+    private final EditText SendMessage;
+    private final boolean isConnected;
+
+    public SendMessage(MainActivity activity, OutputStream os, EditText SendMessage, boolean isConnected) {
+        this.activity = activity;
+        this.os = os;
+        this.SendMessage = SendMessage;
+        this.isConnected = isConnected;
+    }
+
+    public void sendMessage() {
+        // os가 null이거나 연결 상태가 false면 차단
+        if (os == null || !isConnected) {
+            Toast.makeText(activity, "먼저 연결해 주세요",  Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        new Thread(() -> {
+            try {
+                String msg = SendMessage.getText().toString() + "\n";
+                MessageSend(os,msg);
+                activity.runOnUiThread(() -> SendMessage.setText(""));
+            } catch (IOException e) {
+                Log.e("BT_LOG", "전송 실패", e);
+                activity.runOnUiThread(() -> Toast.makeText(activity, "전송 실패!", Toast.LENGTH_SHORT).show());
+            }
+        }).start();
+    }
+
+    public static void MessageSend(OutputStream os, String msg) throws IOException {
+        os.write(msg.getBytes(StandardCharsets.UTF_8));
+        os.flush();
+    }
+}
