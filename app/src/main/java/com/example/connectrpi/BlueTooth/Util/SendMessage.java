@@ -27,6 +27,7 @@ public class SendMessage {
         // os가 null이거나 연결 상태가 false면 차단
         if (os == null || !isConnected) {
             Toast.makeText(activity, "먼저 연결해 주세요",  Toast.LENGTH_SHORT).show();
+            Log.e("BT_LOG","연결이 되어있지 않음");
             return;
         }
 

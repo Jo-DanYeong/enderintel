@@ -65,6 +65,7 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.connect_button).setOnClickListener(v -> {
             if (Status.getIsRunning()){
                 this.runOnUiThread(() -> Toast.makeText(this, "현재 연결이 되어있습니다.", Toast.LENGTH_SHORT).show());
+                Log.e("BT_LOG","연결이 되어있음");
             }
             else{
                 ConnectManager connector = new ConnectManager(this, bluetoothAdapter, DEVICE_ADDRESS, BT_UUID, receiveText);
@@ -76,6 +77,7 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.ReConnect).setOnClickListener(v -> {
             if (!Status.getIsRunning()){
                 Toast.makeText(this, "현재 연결이 되어있지 않습니다", Toast.LENGTH_SHORT).show();
+                Log.e("BT_LOG","연결이 되어있지 않음");
             }
             else{
                 ConnectManager connector = new ConnectManager(this,bluetoothAdapter,DEVICE_ADDRESS,BT_UUID,receiveText);
@@ -88,6 +90,7 @@ public class MainActivity extends AppCompatActivity {
             //만약 연결이 안돼있는 상태일때 실행 안하기
             if (!Status.getIsRunning()){
                 this.runOnUiThread(() -> Toast.makeText(this, "연결이 되어있지 않습니다.", Toast.LENGTH_SHORT).show());
+                Log.e("BT_LOG","연결이 되어있지 않음");
             }
             else{
                 ConnectManager connector = new ConnectManager(this, bluetoothAdapter, DEVICE_ADDRESS, BT_UUID, receiveText);
@@ -98,8 +101,6 @@ public class MainActivity extends AppCompatActivity {
         //메세지 전송
         findViewById(R.id.Send_BTN).setOnClickListener(v -> {
             // 현재 소켓 상태를 확인하여 전달
-            Status.setIsRunning( (bluetoothSocket != null && bluetoothSocket.isConnected()) );
-
             SendMessage sender = new SendMessage(this, outputStream, sendMessageField, Status.getIsRunning());
             sender.sendMessage();
         });

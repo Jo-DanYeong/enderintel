@@ -85,8 +85,6 @@ public class ConnectManager {
                 //서버로 신호 보내기
                 SendMessage.MessageSend(os,"cmVjb25uZWN0");
                 Log.d("BT_LOG", "재연결 끊기 신호 보냄");
-
-                activity.runOnUiThread(() -> Toast.makeText(activity, "연결이 정상적으로 끊어졌습니다.", Toast.LENGTH_SHORT).show());
                 Status.setIsRunning(false);
 
                 Thread.sleep(3000);
