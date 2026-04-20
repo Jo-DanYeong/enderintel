@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
                                                    xmlns:app="http://schemas.android.com/apk/res-auto"
+                                                   xmlns:tools="http://schemas.android.com/tools"
                                                    android:layout_width="match_parent"
                                                    android:layout_height="match_parent">
 
@@ -11,33 +12,43 @@
             android:text="@string/connect_button"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintHorizontal_bias="0.158"
+            app:layout_constraintHorizontal_bias="0.127"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent"
-            app:layout_constraintVertical_bias="0.023"/>
+            app:layout_constraintVertical_bias="0.096"/>
 
     <Button
             android:id="@+id/Send_BTN"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="88dp"
+            android:layout_marginTop="160dp"
             app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintHorizontal_bias="0.169"
+            app:layout_constraintHorizontal_bias="0.16"
             app:layout_constraintStart_toEndOf="@+id/send_Text"
             app:layout_constraintTop_toTopOf="parent"
             android:text="send"/>
 
     <Button
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:layout_constraintStart_toEndOf="@+id/connect_button"
+            app:layout_constraintEnd_toStartOf="@+id/disconnect_button"
+            app:layout_constraintTop_toTopOf="@+id/connect_button"
+            android:id="@+id/ReConnect"
+            android:text="재연결"/>
+
+    <Button
             android:id="@+id/disconnect_button"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="24dp"
+            android:layout_marginBottom="12dp"
             app:layout_constraintBottom_toTopOf="@+id/send_Text"
             app:layout_constraintEnd_toEndOf="parent"
             android:text="@string/disconnect"
-            app:layout_constraintHorizontal_bias="0.175"
+            app:layout_constraintHorizontal_bias="0.762"
             app:layout_constraintStart_toEndOf="@+id/connect_button"
-            />
+            app:layout_constraintTop_toTopOf="@+id/connect_button"
+            app:layout_constraintVertical_bias="0.0"/>
 
     <EditText
             android:id="@+id/send_Text"
@@ -46,11 +57,11 @@
             android:layout_height="wrap_content"
             android:hint="@string/hint_sendMessage"
             app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintHorizontal_bias="0.055"
+            app:layout_constraintHorizontal_bias="0.142"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintVertical_bias="0.128"/>
+            app:layout_constraintVertical_bias="0.235"/>
 
     <TextView
             android:text="Hello World!"
