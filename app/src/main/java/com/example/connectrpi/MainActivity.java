@@ -73,6 +73,17 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
+        //블루투스 재연결
+        findViewById(R.id.ReConnect).setOnClickListener(v -> {
+            if (!Status.getIsRunning()){
+                Toast.makeText(this, "현재 연결이 되어있지 않습니다", Toast.LENGTH_SHORT).show();
+            }
+            else{
+                ConnectManager connector = new ConnectManager(this,bluetoothAdapter,DEVICE_ADDRESS,BT_UUID,receiveText);
+                connector.reconnectToRaspberryPi(outputStream);
+            }
+        });
+
         //블루투스 연결 해제
         findViewById(R.id.disconnect_button).setOnClickListener(v ->{
             //만약 연결이 안돼있는 상태일때 실행 안하기
