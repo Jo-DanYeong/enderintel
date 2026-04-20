@@ -21,14 +21,14 @@ public class ConnectManager {
     private final BluetoothAdapter adapter;
     private final String address;
     private final UUID uuid;
-    private final TextView Receivedata;
+    private final TextView textView;
 
-    public ConnectManager(MainActivity activity, BluetoothAdapter adapter, String address, UUID uuid, TextView Receivedata) {
+    public ConnectManager(MainActivity activity, BluetoothAdapter adapter, String address, UUID uuid, TextView textView) {
         this.activity = activity;
         this.adapter = adapter;
         this.address = address;
         this.uuid = uuid;
-        this.Receivedata = Receivedata;
+        this.textView = textView;
     }
 
     @SuppressLint("MissingPermission")
@@ -39,7 +39,7 @@ public class ConnectManager {
 
                 BluetoothDevice device = adapter.getRemoteDevice(address);
                 activity.bluetoothSocket = device.createRfcommSocketToServiceRecord(uuid);
-                receiveData = new ReceiveData(activity,activity.inputStream, Receivedata);
+                receiveData = new ReceiveData(activity,activity.inputStream, textView);
 
                 Log.d("BT_LOG", "연결 시도 중...");
                 activity.bluetoothSocket.connect();
@@ -51,7 +51,7 @@ public class ConnectManager {
                 activity.inputStream = activity.bluetoothSocket.getInputStream();
 
                 // 수신 시작
-                ReceiveData receiveData = new ReceiveData(activity, activity.inputStream, Receivedata);
+                ReceiveData receiveData = new ReceiveData(activity, activity.inputStream, textView);
                 receiveData.beginListenForData();
             } catch (IOException e) {
                 Log.e("BT_LOG", "연결 실패: " + e.getMessage());
@@ -74,6 +74,30 @@ public class ConnectManager {
                 Log.e("BT_LOG","에러 발생"+e.getMessage());
                 activity.runOnUiThread(() -> Toast.makeText(activity, "에러 발생"+e.getMessage(), Toast.LENGTH_SHORT).show());
                 Status.setIsRunning(false);
+            }
+        }).start();
+    }
+
+    @SuppressLint("SetTextI18n")
+    public  void reconnectToRaspberryPi(OutputStream os){
+        new Thread(() -> {
+            try{
+                //서버로 신호 보내기
+                SendMessage.MessageSend(os,"cmVjb25uZWN0");
+                Log.d("BT_LOG", "재연결 끊기 신호 보냄");
+
+                activity.runOnUiThread(() -> Toast.makeText(activity, "연결이 정상적으로 끊어졌습니다.", Toast.LENGTH_SHORT).show());
+                Status.setIsRunning(false);
+
+                Thread.sleep(3000);
+                connectToRaspberryPi();
+
+            }catch (IOException e){
+                Log.e("BT_LOG","에러 발생"+e.getMessage());
+                activity.runOnUiThread(() -> Toast.makeText(activity, "에러 발생"+e.getMessage(), Toast.LENGTH_SHORT).show());
+                Status.setIsRunning(false);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
             }
         }).start();
     }

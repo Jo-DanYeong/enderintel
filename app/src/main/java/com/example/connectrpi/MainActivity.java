@@ -27,16 +27,15 @@ public class MainActivity extends AppCompatActivity {
     // 라즈베리 파이 설정 (상수는 static final 유지)
     private static final String DEVICE_ADDRESS = "2C:CF:67:8C:2B:B0";
     private static final UUID BT_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
+    // UI 컴포넌트
+    private EditText sendMessageField;
+    private TextView receiveText;
 
     // 통신 관련 변수 (다른 클래스에서 activity.변수명으로 접근)
     public BluetoothAdapter bluetoothAdapter;
     public BluetoothSocket bluetoothSocket;
     public OutputStream outputStream;
     public InputStream inputStream;
-
-    // UI 컴포넌트
-    private EditText sendMessageField;
-    private TextView receiveText;
 
     @RequiresApi(api = Build.VERSION_CODES.S)
     @Override
@@ -96,7 +95,7 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        //
+        //메세지 전송
         findViewById(R.id.Send_BTN).setOnClickListener(v -> {
             // 현재 소켓 상태를 확인하여 전달
             Status.setIsRunning( (bluetoothSocket != null && bluetoothSocket.isConnected()) );
