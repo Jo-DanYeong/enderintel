@@ -41,7 +41,7 @@ public class ConnectManager {
                 activity.bluetoothSocket = device.createRfcommSocketToServiceRecord(uuid);
                 receiveData = new ReceiveData(activity,activity.inputStream, textView);
 
-                Log.d("BT_LOG", "연결 시도 중...");
+                Log.i("BT_LOG", "연결 시도 중...");
                 activity.bluetoothSocket.connect();
                 Log.d("BT_LOG", "연결 성공!");
                 activity.runOnUiThread(() -> Toast.makeText(activity, "블루투스 연결 성공!", Toast.LENGTH_SHORT).show());
