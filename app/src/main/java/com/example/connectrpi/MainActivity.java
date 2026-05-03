@@ -25,7 +25,7 @@ import java.util.UUID;
 
 public class MainActivity extends AppCompatActivity {
     // 라즈베리 파이 설정 (상수는 static final 유지)
-    private static final String DEVICE_ADDRESS = "2C:CF:67:8C:2B:B0";
+    private static final String DEVICE_ADDRESS = "E4:5F:01:7B:E6:3D";
     private static final UUID BT_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
     // UI 컴포넌트
     private EditText sendMessageField;
