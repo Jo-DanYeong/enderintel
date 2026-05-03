@@ -9,7 +9,7 @@ class CommunicationSys:
 
         try:
             # 2. Bind to any available address and port 1
-            server_socket.bind(("2C:CF:67:8C:2B:B0", 1))
+            server_socket.bind(("E4:5F:01:7B:E6:3D", 1))
             server_socket.listen(1)
             
             print("--- Bluetooth Server Started ---")
@@ -17,11 +17,15 @@ class CommunicationSys:
             while True:
                 print("\nWaiting for connection on RFCOMM channel 1...")
                 client_socket = None
+                response = "Undefine Message"
 
                 try:   
                     # 3. Wait for connection from Android
                     client_socket, address = server_socket.accept()
                     print(f"Connected! Device Address: {address}")
+                    response = "Connected to Bluetooth Server"
+                        
+                    client_socket.send(response.encode('utf-8'))
 
                     while True:
                         try:
@@ -32,19 +36,35 @@ class CommunicationSys:
                                 break
                     
                             # 5. Decode received data to string
-                            message = data.decode('utf-8').strip()  
-                            response = "Undefined Value"
+                            message = data.decode('utf-8').strip()
                             print(f"Received: {message}")
-                            
-                            if message == "YzJoMWRHUnZkMjQ9":
-                                response = "shutdown complete"
-                                break
+                            match(message):
 
-                            elif message == "":
-                                response = "no value"
+                                case "YzJoMWRHUnZkMjQ9":
+                                    response = "shutdown complete"
+                                    client_socket.send(response.encode('utf-8'))
+                                    break
 
-                            elif message == "soul":
-                                response = "delete messgae"
+                                case "9d634e1a156dc0c1611eb4c3cff57276":
+                                    response = "disconnected"
+                                    client_socket.send(response.encode('utf-8'))
+                                    break
+
+                                case "cmVjb25uZWN0":
+                                    response = "Socket Reset..."
+                                    client_socket.send(response.encode('utf-8'))
+                                    break
+                                    
+                                case "led":
+                                    response = "LED toggled"
+                                    client_socket.send(response.encode('utf-8'))
+                                    
+
+                                case "":
+                                    response = "no Value"
+				                
+                                case _:
+                                    response = "undefine Value"
 
                             print(f"Sent : {response}\n")
                             client_socket.send(response.encode('utf-8'))
@@ -56,7 +76,10 @@ class CommunicationSys:
                         except Exception as e:
                             print(f"Communication error: {e}")
                             break
-                        
+
+                        except KeyboardInterrupt:
+                            break
+                    
                     client_socket.close()
 
                     if 'message' in locals() and message == "YzJoMWRHUnZkMjQ9":
