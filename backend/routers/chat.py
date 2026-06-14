@@ -11,7 +11,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-import ai_handler
+from .. import ai_handler
 
 router = APIRouter()
 

@@ -29,14 +29,18 @@ class ButtonListener:
         self._callback = on_pressed
         if not self._gpio_available:
             return
-        self.GPIO.add_event_detect(
-            self.pin, self.GPIO.FALLING,
-            callback=lambda _: threading.Thread(
-                target=self._callback, daemon=True
-            ).start(),
-            bouncetime=300,
-        )
-        print(f"?? ��ư ��� �� (BCM {self.pin})")
+        try:
+            self.GPIO.add_event_detect(
+                self.pin, self.GPIO.FALLING,
+                callback=lambda _: threading.Thread(
+                    target=self._callback, daemon=True
+                ).start(),
+                bouncetime=300,
+            )
+            print(f"?? ??ư ????? ?? (BCM {self.pin})")
+        except RuntimeError as e:
+            print(f"??  ??ư ??? ??? (GPIO ???? ??? ?): {e}")
+            self._gpio_available = False
 
     def stop(self):
         if self._gpio_available:

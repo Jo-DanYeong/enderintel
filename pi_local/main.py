@@ -95,6 +95,25 @@ class EnderAssistant:
             print(f"❌ 통신 오류: {e}")
             return None
 
+    async def _send_text_to_backend(self, text: str) -> dict | None:
+        """
+        텍스트 입력을 백엔드로 전송 (개발/테스트용 대체 경로)
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{BACKEND_URL}/api/chat/text",
+                    json={"text": text},
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.ConnectError:
+            print(f"❌ 백엔드 연결 실패 ({BACKEND_URL})")
+            return None
+        except Exception as e:
+            print(f"❌ 통신 오류: {e}")
+            return None
+
     def run(self):
         print("\n" + "="*40)
         print("  🚀 Ender-Intel AI 시스템 시작")
@@ -102,15 +121,53 @@ class EnderAssistant:
         print(f"  웨이크워드: '{WAKE_WORD}'")
         print("="*40 + "\n")
 
-        self.wake_detector.start(on_detected=self.on_triggered)
-        self.button.start(on_pressed=self.on_triggered)
+        # 웨이크워드/버튼이 사용 가능한 경우에만 시작
+        wake_available = getattr(self.wake_detector, "_model_available", False)
+        button_available = getattr(self.button, "_gpio_available", False)
 
+        if wake_available:
+            self.wake_detector.start(on_detected=self.on_triggered)
+        else:
+            print("!! 웨이크워드 비활성화: 마이크/모델이 없습니다.")
+
+        if button_available:
+            self.button.start(on_pressed=self.on_triggered)
+        else:
+            print("!! 버튼 비활성화: RPi.GPIO 사용 불가 또는 BUTTON_PIN=-1")
+
+        # 둘 다 없으면 간단한 CLI 대체 모드 실행
+        if not wake_available and not button_available:
+            try:
+                print("\n대체 CLI 모드: 텍스트를 입력하면 백엔드로 전송됩니다. 종료하려면 'quit' 입력")
+                while True:
+                    txt = input("> ").strip()
+                    if not txt:
+                        continue
+                    if txt.lower() in ("quit", "exit"):
+                        break
+                    result = asyncio.run(self._send_text_to_backend(txt))
+                    if result:
+                        print(f"👤 사용자: {result.get('user_text', txt)}")
+                        print(f"🤖 Ender:  {result.get('text_reply', '')}")
+            except KeyboardInterrupt:
+                pass
+        else:
+            try:
+                threading.Event().wait()
+            except KeyboardInterrupt:
+                print("\n\n👋 Ender 시스템 종료")
+        
+        # 정리
         try:
-            threading.Event().wait()
-        except KeyboardInterrupt:
-            print("\n\n👋 Ender 시스템 종료")
-            self.wake_detector.stop()
-            self.button.stop()
+            if wake_available:
+                self.wake_detector.stop()
+        except Exception:
+            pass
+        try:
+            if button_available:
+                self.button.stop()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

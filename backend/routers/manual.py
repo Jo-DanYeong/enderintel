@@ -7,15 +7,17 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Literal
+from typing import Any
 
-import esp32_client
+from .. import esp32_client
 
 router = APIRouter()
 
 
 class LightRequest(BaseModel):
     action: Literal["ON", "OFF"]
-    color: Literal["RED", "BLUE", "GREEN", "WHITE", "YELLOW", "PURPLE", "CYAN", "ORANGE"] = "WHITE"
+    # Accept named colors, hex string '#RRGGBB' or 'RRGGBB', or an RGB dict {r,g,b}
+    color: Any = "WHITE"
 
 
 class CubeRequest(BaseModel):

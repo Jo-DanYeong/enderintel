@@ -70,7 +70,50 @@ async def _send_ble_command(char_uuid: str, payload: dict) -> dict:
 
 
 async def send_led_command(state: str, color: str = "WHITE") -> dict:
-    hex_color = COLOR_MAP.get(color.upper(), "#FFFFFF") if state == "ON" else "#000000"
+    """Send LED command.
+
+    `color` may be:
+      - a hex string like '#RRGGBB' or 'RRGGBB'
+      - a dict with keys `r`,`g`,`b` (0-255)
+      - a named color present in `COLOR_MAP` (case-insensitive)
+
+    If `state` != 'ON', color is set to '#000000'.
+    """
+    # Normalize OFF state
+    if state.upper() != "ON":
+        hex_color = "#000000"
+        return await _send_ble_command(CHAR_LED_UUID, {"state": state, "color": hex_color})
+
+    # If color is a dict like {"r":255,"g":128,"b":0}
+    if isinstance(color, dict):
+        try:
+            r = int(color.get("r", 0))
+            g = int(color.get("g", 0))
+            b = int(color.get("b", 0))
+            for v in (r, g, b):
+                if v < 0 or v > 255:
+                    raise ValueError("RGB values must be 0-255")
+            hex_color = f"#{r:02X}{g:02X}{b:02X}"
+        except Exception as e:
+            return {"success": False, "message": f"Invalid RGB dict: {e}"}
+
+    # If color is a string
+    elif isinstance(color, str):
+        s = color.strip()
+        # Accept '#RRGGBB' or 'RRGGBB'
+        if s.startswith("#") and len(s) == 7:
+            hex_color = s.upper()
+        elif len(s) == 6 and all(c in "0123456789ABCDEFabcdef" for c in s):
+            hex_color = "#" + s.upper()
+        else:
+            # Try named color
+            hex_color = COLOR_MAP.get(s.upper(), None)
+            if not hex_color:
+                return {"success": False, "message": f"Unknown color: {color}"}
+
+    else:
+        return {"success": False, "message": "Unsupported color type"}
+
     return await _send_ble_command(CHAR_LED_UUID, {"state": state, "color": hex_color})
 
 

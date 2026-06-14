@@ -1,92 +1,136 @@
-import socket,time
-
+import socket
+import time
+import threading
+import os
+ 
+ 
 class CommunicationSys:
-    def __init__(self,server_soket):
-        self.server_soket = server_soket      
+    def __init__(self, server_socket, ai_trigger_callback=None):
+        """
+        server_socket       : �������� RFCOMM ����
+        ai_trigger_callback : "ender" ���� ���� �� ȣ���� �Լ� (������ AI ��� ��Ȱ��)
+        """
+        self.server_socket = server_socket
+        self._ai_trigger = ai_trigger_callback
+ 
+    # ��������������������������������������������������������������������������������������������
+    # ���� ����
+    # ��������������������������������������������������������������������������������������������
+    def _trigger_ai(self, client_socket):
+        """AI ������������ ���� �����忡�� �����ϰ�, ����� BT�� ����."""
+        if self._ai_trigger is None:
+            client_socket.send("AI ����� ��Ȱ��ȭ �����Դϴ�.".encode("utf-8"))
+            return
+ 
+        def _run():
+            try:
+                # ai_trigger_callback �� (reply_text) -> None ����
+                # pi_local/main.py �� EnderAssistant.on_triggered �� �����ؼ� �ѱ�
+                reply = self._ai_trigger()          # ����ŷ (���� �� STT �� GPT �� TTS)
+                if reply and client_socket:
+                    try:
+                        client_socket.send(reply.encode("utf-8"))
+                    except Exception:
+                        pass
+            except Exception as e:
+                print(f"[BT-AI] ���������� ����: {e}")
+ 
+        threading.Thread(target=_run, daemon=True).start()
 
     def CommSys(self):
-        server_socket = self.server_soket
+        server_socket = self.server_socket
+
+        # Determine bind address from environment or fallback to previous MAC
+        bind_addr = os.getenv("BT_BIND_ADDRESS", "E4:5F:01:7B:E6:3D")
 
         try:
-            # 2. Bind to any available address and port 1
-            server_socket.bind(("E4:5F:01:7B:E6:3D", 1))
+            server_socket.bind((bind_addr, 1))
             server_socket.listen(1)
-            
-            print("--- Bluetooth Server Started ---")
-                
+            print(f"--- Bluetooth Server Started (bound to {bind_addr}) ---")
+ 
             while True:
                 print("\nWaiting for connection on RFCOMM channel 1...")
                 client_socket = None
-                response = "Undefine Message"
-
-                try:   
-                    # 3. Wait for connection from Android
+ 
+                try:
                     client_socket, address = server_socket.accept()
                     print(f"Connected! Device Address: {address}")
-                    response = "Connected to Bluetooth Server"
-                        
-                    client_socket.send(response.encode('utf-8'))
-
+                    client_socket.send("Connected to Bluetooth Server".encode("utf-8"))
+ 
                     while True:
                         try:
-                            # 4. Receive data (max 1024 bytes)
                             data = client_socket.recv(1024)
                             if not data:
                                 print("Client disconnected.")
                                 break
-                    
-                            # 5. Decode received data to string
-                            message = data.decode('utf-8').strip()
+ 
+                            message = data.decode("utf-8").strip()
                             print(f"Received: {message}")
-                            match(message):
-                                case "led":
-                                    response = "LED toggled"
-                                    client_socket.send(response.encode('utf-8'))
-                                    
-                                case "":
-                                    response = "no Value"
-				                
-                                case _:
-                                    response = "undefine Value"
-                            response += "\n"
-                            print(f"Sent : {response}\n")
-                            client_socket.send(response.encode('utf-8'))
+ 
+                            match message:
+ 
+                                # ���� AI �� Ʈ���� ����������������������������������������������������
+                                case "ender" | "����" | "ai":
+                                    print("[BT] AI ���������� Ʈ����")
+                                    client_socket.send(
+                                        "AI �񼭸� �����մϴ�. ������ �ּ���.".encode("utf-8")
+                                    )
+                                    self._trigger_ai(client_socket)
+                                    # ������������ �񵿱�� ����, ������ ��� ���
+                                    continue
 
+                                # ���� ���� ���ɾ� ����������������������������������������������������������
+                                case "YzJoMWRHUnZkMjQ5":        # shutdown
+                                    client_socket.send("shutdown complete".encode("utf-8"))
+                                    break
+ 
+                                case "9d634e1a156dc0c1611eb4c3cff57276":  # disconnect
+                                    client_socket.send("disconnected".encode("utf-8"))
+                                    break
+ 
+                                case "cmVjb25uZWN0":             # reconnect
+                                    client_socket.send("Socket Reset...".encode("utf-8"))
+                                    break
+ 
+                                case "led":
+                                    client_socket.send("LED toggled".encode("utf-8"))
+ 
+                                case "":
+                                    client_socket.send("no Value".encode("utf-8"))
+ 
+                                case _:
+                                    client_socket.send("undefined Value".encode("utf-8"))
+ 
+                            print(f"Sent response for: {message}\n")
+ 
                         except ConnectionResetError:
                             print("Connection was reset by the client.")
                             break
-
+                        except KeyboardInterrupt:
+                            break
                         except Exception as e:
                             print(f"Communication error: {e}")
                             break
-
-                        except KeyboardInterrupt:
-                            break
-                    
-                    client_socket.close()
-
-                    if 'message' in locals() and message == "YzJoMWRHUnZkMjQ9":
+ 
+                    # shutdown �����̸� ������ ����
+                    if "message" in dir() and message == "YzJoMWRHUnZkMjQ5":
                         print("Stopping server by command...")
                         break
-
+ 
                 except Exception as e:
                     print(f"Accept error: {e}")
                     time.sleep(1)
-
                 finally:
                     if client_socket is not None:
                         try:
                             client_socket.close()
                             print("Client socket closed safely.")
-                        except:
+                        except Exception:
                             pass
-
+ 
         except KeyboardInterrupt:
             print("\nServer stopped by user.")
-
         finally:
-            # 7. Close sockets
-            if 'client_socket' in locals():
-                client_socket.close()
             server_socket.close()
             print("Server stopped.")
+ 

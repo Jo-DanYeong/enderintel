@@ -4,7 +4,7 @@ from pathlib import Path
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
  
-import esp32_client
+from . import esp32_client
  
 load_dotenv()
  
@@ -26,7 +26,8 @@ TOOLS = [
                     },
                     "color": {
                         "type": "string",
-                        "enum": ["RED", "BLUE", "GREEN", "WHITE", "YELLOW", "PURPLE", "CYAN", "ORANGE"],
+                        "description": "Named color (RED) or hex string like '#RRGGBB' or 'RRGGBB'.",
+                        "pattern": "^#?[0-9A-Fa-f]{6}$",
                     },
                 },
                 "required": ["action"],
@@ -50,6 +51,23 @@ TOOLS = [
             },
         },
     },
+    {
+    "type": "function",
+    "function": {
+        "name": "system_control",
+        "description": "�ý��� ������ ���ų� �翬���մϴ�.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["shutdown", "reconnect"]
+                }
+            },
+            "required": ["action"]
+        }
+    }
+}
 ]
  
 SYSTEM_PROMPT = """
