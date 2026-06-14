@@ -1,121 +1,107 @@
-"""
-ESP32 BLE Ŭ���̾�Ʈ
-���� �� BLE �� ESP32 ���� ����
+"""RFCOMM-based ESP32 command sender.
+
+This module sends plain text commands over the RFCOMM socket registered in
+`backend.rfcomm_bridge`. It preserves the async function names used elsewhere.
 """
 import asyncio
-import json
 import os
-from bleak import BleakClient, BleakScanner
-from bleak.exc import BleakError
-from dotenv import load_dotenv
+from typing import Any
 
-load_dotenv()
+from . import rfcomm_bridge
 
-ESP32_DEVICE_NAME = os.getenv("ESP32_DEVICE_NAME", "Ender-Intel")
-CHAR_LED_UUID     = "12345678-1234-1234-1234-123456789001"
-CHAR_MOTOR_UUID   = "12345678-1234-1234-1234-123456789002"
 
-MAX_RETRIES  = 3
-RETRY_DELAY  = 1.0
-SCAN_TIMEOUT = 5.0
-
-COLOR_MAP: dict[str, str] = {
-    "RED":    "#FF0000",
-    "GREEN":  "#00FF00",
-    "BLUE":   "#0000FF",
-    "WHITE":  "#FFFFFF",
-    "YELLOW": "#FFFF00",
-    "PURPLE": "#800080",
-    "CYAN":   "#00FFFF",
-    "ORANGE": "#FF8C00",
+COLOR_MAP = {
+    "RED": (255, 0, 0),
+    "GREEN": (0, 255, 0),
+    "BLUE": (0, 0, 255),
+    "WHITE": (255, 255, 255),
+    "YELLOW": (255, 255, 0),
+    "PURPLE": (128, 0, 128),
+    "CYAN": (0, 255, 255),
+    "ORANGE": (255, 140, 0),
 }
 
 
-async def _find_esp32() -> str | None:
-    print(f"?? BLE ��ĵ ��... ({ESP32_DEVICE_NAME})")
-    devices = await BleakScanner.discover(timeout=SCAN_TIMEOUT)
-    for d in devices:
-        if d.name and ESP32_DEVICE_NAME in d.name:
-            print(f"? �߰�: {d.name} ({d.address})")
-            return d.address
-    print("? ESP32�� ã�� ���߽��ϴ�.")
-    return None
-
-
-async def _send_ble_command(char_uuid: str, payload: dict) -> dict:
-    data = json.dumps(payload).encode("utf-8")
-
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            address = await _find_esp32()
-            if not address:
-                if attempt < MAX_RETRIES:
-                    await asyncio.sleep(RETRY_DELAY)
-                    continue
-                return {"success": False, "message": "ESP32�� ã�� �� �����ϴ�."}
-
-            async with BleakClient(address, timeout=10.0) as client:
-                await client.write_gatt_char(char_uuid, data, response=False)
-                print(f"? BLE ���� ����: {payload}")
-                return {"success": True, "message": f"���� ����: {payload}"}
-
-        except BleakError as e:
-            print(f"??  BLE ���� ({attempt}/{MAX_RETRIES}): {e}")
-            if attempt < MAX_RETRIES:
-                await asyncio.sleep(RETRY_DELAY)
-        except Exception as e:
-            return {"success": False, "message": str(e)}
-
-    return {"success": False, "message": f"{MAX_RETRIES}ȸ �õ� �� ����"}
-
-
-async def send_led_command(state: str, color: str = "WHITE") -> dict:
-    """Send LED command.
-
-    `color` may be:
-      - a hex string like '#RRGGBB' or 'RRGGBB'
-      - a dict with keys `r`,`g`,`b` (0-255)
-      - a named color present in `COLOR_MAP` (case-insensitive)
-
-    If `state` != 'ON', color is set to '#000000'.
-    """
-    # Normalize OFF state
-    if state.upper() != "ON":
-        hex_color = "#000000"
-        return await _send_ble_command(CHAR_LED_UUID, {"state": state, "color": hex_color})
-
-    # If color is a dict like {"r":255,"g":128,"b":0}
+def _normalize_color(color: Any):
+    """Return (r,g,b) tuple or raise ValueError."""
     if isinstance(color, dict):
-        try:
-            r = int(color.get("r", 0))
-            g = int(color.get("g", 0))
-            b = int(color.get("b", 0))
-            for v in (r, g, b):
-                if v < 0 or v > 255:
-                    raise ValueError("RGB values must be 0-255")
-            hex_color = f"#{r:02X}{g:02X}{b:02X}"
-        except Exception as e:
-            return {"success": False, "message": f"Invalid RGB dict: {e}"}
-
-    # If color is a string
+        r = int(color.get("r", 0))
+        g = int(color.get("g", 0))
+        b = int(color.get("b", 0))
     elif isinstance(color, str):
         s = color.strip()
-        # Accept '#RRGGBB' or 'RRGGBB'
         if s.startswith("#") and len(s) == 7:
-            hex_color = s.upper()
+            r = int(s[1:3], 16)
+            g = int(s[3:5], 16)
+            b = int(s[5:7], 16)
         elif len(s) == 6 and all(c in "0123456789ABCDEFabcdef" for c in s):
-            hex_color = "#" + s.upper()
+            r = int(s[0:2], 16)
+            g = int(s[2:4], 16)
+            b = int(s[4:6], 16)
         else:
-            # Try named color
-            hex_color = COLOR_MAP.get(s.upper(), None)
-            if not hex_color:
-                return {"success": False, "message": f"Unknown color: {color}"}
-
+            named = COLOR_MAP.get(s.upper())
+            if not named:
+                raise ValueError(f"Unknown color: {color}")
+            return named
+    elif isinstance(color, tuple) and len(color) == 3:
+        r, g, b = color
     else:
-        return {"success": False, "message": "Unsupported color type"}
+        raise ValueError("Unsupported color type")
 
-    return await _send_ble_command(CHAR_LED_UUID, {"state": state, "color": hex_color})
+    for v in (r, g, b):
+        if v < 0 or v > 255:
+            raise ValueError("RGB components must be 0-255")
+    return (int(r), int(g), int(b))
+
+
+async def send_led_command(state: str, color: Any = "WHITE") -> dict:
+    """Send LED command via RFCOMM bridge.
+
+    Returns dict with success/message/command.
+    """
+    try:
+        if state.upper() != "ON":
+            r, g, b = (0, 0, 0)
+        else:
+            r, g, b = _normalize_color(color)
+
+        cmd = f"LED {r} {g} {b}"
+
+        # send in thread to avoid blocking
+        result = await asyncio.to_thread(rfcomm_bridge.send_command, cmd)
+        return {"success": result.get("success", False), "message": result.get("message", ""), "command": cmd}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
 
 
 async def send_motor_command(command: str) -> dict:
-    return await _send_ble_command(CHAR_MOTOR_UUID, {"command": command.upper()})
+    """Translate a logical motor command to RFCOMM text commands.
+
+    Accepts commands like 'SPIN_LEFT', 'SPIN_RIGHT', 'STOP', or raw instructions.
+    """
+    cmd = (command or "").upper()
+    commands = []
+    if cmd == "SPIN_LEFT":
+        commands = ["AUTO 0", "M Y 85"]
+    elif cmd == "SPIN_RIGHT":
+        commands = ["AUTO 0", "M Y 95"]
+    elif cmd == "STOP":
+        commands = ["AUTO 0", "M 90"]
+    else:
+        # If user provided a direct motor command like 'M 90' or 'M Y 100', send it safely
+        # Validate simple patterns
+        parts = cmd.split()
+        if parts and parts[0] in ("M", "AUTO", "M","TARGET","PID","DIR","ZERO"):
+            # single-line passthrough
+            commands = [cmd]
+        else:
+            return {"success": False, "message": f"Unknown motor action: {command}"}
+
+    results = []
+    for c in commands:
+        res = await asyncio.to_thread(rfcomm_bridge.send_command, c)
+        results.append(res)
+        if not res.get("success"):
+            return {"success": False, "message": f"Failed to send: {c}", "details": res}
+
+    return {"success": True, "message": "sent", "commands": commands}

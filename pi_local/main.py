@@ -76,8 +76,8 @@ class EnderAssistant:
 
     async def _send_to_backend(self, wav_path: str) -> dict | None:
         """
-        wav 파일을 백엔드로 전송.
-        백엔드가 TTS 오디오를 포함해서 반환.
+        Send a wav file to the backend.
+        The backend is expected to return a JSON response and may include TTS audio bytes.
         """
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -97,7 +97,7 @@ class EnderAssistant:
 
     async def _send_text_to_backend(self, text: str) -> dict | None:
         """
-        텍스트 입력을 백엔드로 전송 (개발/테스트용 대체 경로)
+        Send a text input to the backend (alternate route for development/testing).
         """
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -121,24 +121,24 @@ class EnderAssistant:
         print(f"  웨이크워드: '{WAKE_WORD}'")
         print("="*40 + "\n")
 
-        # 웨이크워드/버튼이 사용 가능한 경우에만 시작
+        # Start only if wake-word or button are available
         wake_available = getattr(self.wake_detector, "_model_available", False)
         button_available = getattr(self.button, "_gpio_available", False)
 
         if wake_available:
             self.wake_detector.start(on_detected=self.on_triggered)
         else:
-            print("!! 웨이크워드 비활성화: 마이크/모델이 없습니다.")
+            print("!! Wake word disabled: no microphone/model available.")
 
         if button_available:
             self.button.start(on_pressed=self.on_triggered)
         else:
-            print("!! 버튼 비활성화: RPi.GPIO 사용 불가 또는 BUTTON_PIN=-1")
+            print("!! Button disabled: RPi.GPIO unavailable or BUTTON_PIN=-1")
 
-        # 둘 다 없으면 간단한 CLI 대체 모드 실행
+        # If neither is available, run a simple CLI fallback mode
         if not wake_available and not button_available:
             try:
-                print("\n대체 CLI 모드: 텍스트를 입력하면 백엔드로 전송됩니다. 종료하려면 'quit' 입력")
+                print("\nFallback CLI mode: enter text to send to backend. Type 'quit' to exit")
                 while True:
                     txt = input("> ").strip()
                     if not txt:

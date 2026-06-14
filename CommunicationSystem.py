@@ -55,6 +55,13 @@ class CommunicationSys:
                 try:
                     client_socket, address = server_socket.accept()
                     print(f"Connected! Device Address: {address}")
+                    # register connected client socket in the RFCOMM bridge
+                    try:
+                        from backend import rfcomm_bridge
+                        rfcomm_bridge.set_client_socket(client_socket)
+                        print("[BT] Registered client socket in rfcomm_bridge")
+                    except Exception:
+                        pass
                     client_socket.send("Connected to Bluetooth Server".encode("utf-8"))
  
                     while True:
@@ -125,6 +132,12 @@ class CommunicationSys:
                         try:
                             client_socket.close()
                             print("Client socket closed safely.")
+                            try:
+                                from backend import rfcomm_bridge
+                                rfcomm_bridge.clear_client_socket()
+                                print("[BT] Cleared client socket from rfcomm_bridge")
+                            except Exception:
+                                pass
                         except Exception:
                             pass
  
