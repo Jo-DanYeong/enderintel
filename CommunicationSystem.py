@@ -39,33 +39,16 @@ class CommunicationSys:
                             message = data.decode('utf-8').strip()
                             print(f"Received: {message}")
                             match(message):
-
-                                case "YzJoMWRHUnZkMjQ9":
-                                    response = "shutdown complete"
-                                    client_socket.send(response.encode('utf-8'))
-                                    break
-
-                                case "9d634e1a156dc0c1611eb4c3cff57276":
-                                    response = "disconnected"
-                                    client_socket.send(response.encode('utf-8'))
-                                    break
-
-                                case "cmVjb25uZWN0":
-                                    response = "Socket Reset..."
-                                    client_socket.send(response.encode('utf-8'))
-                                    break
-                                    
                                 case "led":
                                     response = "LED toggled"
                                     client_socket.send(response.encode('utf-8'))
                                     
-
                                 case "":
                                     response = "no Value"
 				                
                                 case _:
                                     response = "undefine Value"
-
+                            response += "\n"
                             print(f"Sent : {response}\n")
                             client_socket.send(response.encode('utf-8'))
 
