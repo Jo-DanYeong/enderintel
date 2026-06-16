@@ -45,6 +45,7 @@ class CommunicationSys:
 
         try:
             server_socket.bind((bind_addr, 1))
+            #server_socket.bind(("",1))
             server_socket.listen(1)
             print(f"--- Bluetooth Server Started (bound to {bind_addr}) ---")
  
@@ -72,7 +73,6 @@ class CommunicationSys:
                                 break
  
                             message = data.decode("utf-8").strip()
-                            print(f"Received: {message}")
  
                             match message:
  
@@ -107,9 +107,7 @@ class CommunicationSys:
  
                                 case _:
                                     client_socket.send("undefined Value".encode("utf-8"))
- 
-                            print(f"Sent response for: {message}\n")
- 
+
                         except ConnectionResetError:
                             print("Connection was reset by the client.")
                             break
