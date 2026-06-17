@@ -26,6 +26,11 @@ class CubeRequest(BaseModel):
     action: Literal["SPIN_LEFT", "SPIN_RIGHT", "STOP"]
 
 
+@router.get("/connection", summary="ESP32 Bluetooth connection state")
+async def manual_connection():
+    return JSONResponse(content={"connected": rfcomm_bridge.is_connected()})
+
+
 @router.post("/light", summary="���� ���� ����")
 async def manual_light(body: LightRequest):
     result = await esp32_client.send_led_command(body.action, body.color)

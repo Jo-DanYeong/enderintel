@@ -1,10 +1,5 @@
-"""Simple RFCOMM bridge to hold the connected ESP32 client socket and send commands.
-
-This module is thread-safe and intended to be used by CommunicationSystem (which accepts
-the RFCOMM connection) and by async API handlers which send commands via the bridge.
-"""
+"""Thread-safe RFCOMM bridge for ESP32 command sending."""
 import threading
-from typing import Optional
 
 _client_socket = None
 _lock = threading.Lock()
@@ -16,10 +11,11 @@ def set_client_socket(sock) -> None:
         _client_socket = sock
 
 
-def clear_client_socket() -> None:
+def clear_client_socket(sock=None) -> None:
     global _client_socket
     with _lock:
-        _client_socket = None
+        if sock is None or sock is _client_socket:
+            _client_socket = None
 
 
 def get_client_socket():
@@ -27,12 +23,17 @@ def get_client_socket():
         return _client_socket
 
 
+def is_connected() -> bool:
+    return get_client_socket() is not None
+
+
 def send_command(command: str) -> dict:
     """Send a single command (string) over the RFCOMM socket.
 
     Returns a dict: {"success": bool, "message": str, "command": command}
     """
-    sock = get_client_socket()
+    with _lock:
+        sock = _client_socket
     if sock is None:
         return {"success": False, "message": "No RFCOMM client connected", "command": command}
 
@@ -42,4 +43,5 @@ def send_command(command: str) -> dict:
             sock.sendall(payload)
         return {"success": True, "message": "sent", "command": command}
     except Exception as e:
+        clear_client_socket(sock)
         return {"success": False, "message": str(e), "command": command}
