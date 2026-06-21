@@ -1,11 +1,11 @@
-#include "I2Cdev.h"
-#include "MPU6050.h"
-#include "Wire.h"
-#include "Adafruit_NeoPixel.h"
-#include "BluetoothSerial.h"
+#include <Adafruit_NeoPixel.h>
+#include <BluetoothSerial.h>
 #include <ESP32Servo.h>
-#include <math.h>
+#include <I2Cdev.h>
+#include <MPU6050.h>
+#include <Wire.h>
 #include <ctype.h>
+#include <math.h>
 
 #ifndef OUTPUT_OPEN_DRAIN
 #define OUTPUT_OPEN_DRAIN OUTPUT
@@ -15,270 +15,272 @@
 #define RAD_TO_DEG 57.2957795131f
 #endif
 
-// Pin settings
-#define CHECK_LED     5
-#define LED_PIN      15
-#define NUMPIXELS    16
-#define MPU_INT_PIN   4
-#define MOTOR_X_PIN  27
-#define MOTOR_Y_PIN  14
-#define MOTOR_Z_PIN  12
-#define AXIS_COUNT    3
-#define AXIS_X        0
-#define AXIS_Y        1
-#define AXIS_Z        2
-#define I2C_SDA_PIN  21
-#define I2C_SCL_PIN  22
-#define MPU_ADDR   0x68
+namespace Config {
+constexpr int CHECK_LED_PIN = 5;
+constexpr int LED_PIN = 13;
+constexpr int LED_COUNT = 144;
+constexpr int MOTOR_Z_PIN = 12;
+constexpr int I2C_SDA_PIN = 21;
+constexpr int I2C_SCL_PIN = 22;
+constexpr uint8_t MPU_ADDRESS = 0x68;
 
-// ESC settings
-#define ESC_MIN_US    1000
-#define ESC_MAX_US    2000
-#define ESC_NEUTRAL     90
-#define ESC_MIN_ANGLE    0
-#define ESC_MAX_ANGLE  180
+constexpr int ESC_MIN_US = 1000;
+constexpr int ESC_MAX_US = 2000;
+constexpr int ESC_NEUTRAL = 90;
+constexpr int ESC_MIN_ANGLE = 0;
+constexpr int ESC_MAX_ANGLE = 180;
+constexpr int ESC_AUTO_RAMP_STEP = 4;
+constexpr int ESC_MANUAL_RAMP_STEP = 3;
+constexpr uint32_t ESC_ARM_TIME_MS = 5000;
 
-// Balancing PID settings
-#define PID_LOOP_MS             20
-#define BALANCE_OUTPUT_LIMIT    30.0f
-#define BALANCE_INTEGRAL_LIMIT  80.0f
-#define BALANCE_FALL_ANGLE      45.0f
-#define COMPLEMENTARY_ALPHA      0.98f
-#define MOTOR_DEADBAND           2
-#define RUN_BOOT_CALIBRATION      0
-#define BT_RETRY_MS           5000
-#define BT_RFCOMM_CHANNEL        1
+constexpr uint32_t SENSOR_LOOP_MS = 10;
+constexpr uint32_t CONTROL_LOOP_MS = 20;
+constexpr float CONTROL_DT_FALLBACK_SEC = CONTROL_LOOP_MS / 1000.0f;
+constexpr float COMPLEMENTARY_ALPHA = 0.98f;
+constexpr float GYRO_FILTER_ALPHA = 0.70f;
 
-Adafruit_NeoPixel strip(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
+constexpr float DEFAULT_KP = 80.0f;
+constexpr float DEFAULT_KI = 0.0f;
+constexpr float DEFAULT_KD = 0.0f;
+constexpr float DEFAULT_OUTPUT_LIMIT_DEG = 40.0f;
+constexpr float DEFAULT_MIN_OUTPUT_DEG = 9.0f;
+constexpr int DEFAULT_MOTOR_DIRECTION = -1;
+
+constexpr float COMMAND_LIMIT = 255.0f;
+constexpr float MOTOR_DEADBAND = 2.0f;
+constexpr float INTEGRAL_OUTPUT_LIMIT = 60.0f;
+constexpr float INTEGRAL_ACTIVE_ANGLE_DEG = 5.0f;
+constexpr float BALANCE_ACTIVE_ANGLE_DEG = 20.0f;
+constexpr float TARGET_LIMIT_DEG = 15.0f;
+
+constexpr bool RUN_BOOT_CALIBRATION = true;
+constexpr int BT_RFCOMM_CHANNEL = 1;
+constexpr const char *BT_DEVICE_NAME = "ESP32-Cube-blue";
+}  // namespace Config
+
+struct BalanceState {
+    float kp = Config::DEFAULT_KP;
+    float ki = Config::DEFAULT_KI;
+    float kd = Config::DEFAULT_KD;
+
+    float targetAngleDeg = 0.0f;
+    float angleDeg = 0.0f;
+    float angleOffsetDeg = 0.0f;
+    float gyroRateDps = 0.0f;
+    float filteredGyroRateDps = 0.0f;
+    float proportionalTerm = 0.0f;
+    float integralTerm = 0.0f;
+    float derivativeTerm = 0.0f;
+    float outputCommand = 0.0f;
+
+    float outputLimitDeg = Config::DEFAULT_OUTPUT_LIMIT_DEG;
+    float minOutputDeg = Config::DEFAULT_MIN_OUTPUT_DEG;
+
+    int motorDirection = Config::DEFAULT_MOTOR_DIRECTION;
+    int manualEscAngle = Config::ESC_NEUTRAL;
+    int escAngle = Config::ESC_NEUTRAL;
+
+    bool balanceEnabled = false;
+    bool motorEnabled = true;
+    bool fault = false;
+    bool forceNeutral = true;
+};
+
+Adafruit_NeoPixel strip(
+    Config::LED_COUNT,
+    Config::LED_PIN,
+    NEO_GRB + NEO_KHZ800
+);
 BluetoothSerial SerialBT;
-MPU6050 accelgyro;
-Servo motorESC[AXIS_COUNT];
-const int motorPins[AXIS_COUNT] = {MOTOR_X_PIN, MOTOR_Y_PIN, MOTOR_Z_PIN};
-const char axisNames[AXIS_COUNT] = {'X', 'Y', 'Z'};
-int motorDirection[AXIS_COUNT] = {1, 1, 1};
+MPU6050 mpu;
+Servo motorEsc;
 
-struct SensorData {
-    int16_t ax, ay, az, gx, gy, gz;
-};
+SemaphoreHandle_t ledMutex = nullptr;
+SemaphoreHandle_t balanceMutex = nullptr;
 
-struct PidState {
-    float k1;
-    float k2;
-    float k3;
-    float setpointDeg[AXIS_COUNT];
-    float currentDeg[AXIS_COUNT];
-    float angleOffsetDeg[AXIS_COUNT];
-    float gyroRateDps[AXIS_COUNT];
-    float pidOutput[AXIS_COUNT];
-    float motorSpeedX;
-    float motorSpeedY;
-    float gyroYfilt;
-    float gyroZfilt;
-    float outputLimitDeg;
-    float minOutputDeg;
-    bool autoMode;
-    bool fault;
-    bool motorEnabled[AXIS_COUNT];
-    int manualEscAngle[AXIS_COUNT];
-    int escAngle[AXIS_COUNT];
-};
-
-SemaphoreHandle_t ledMutex;
-SemaphoreHandle_t sensorMutex;
-SemaphoreHandle_t pidMutex;
-
-volatile bool mpuInterrupt = false;
+BalanceState balance;
 bool mpuReady = false;
 bool bluetoothReady = false;
 bool bluetoothConnected = false;
-const char *btDeviceName = "ESP32-Cube-blue";
-SensorData currentData = {0, 0, 0, 0, 0, 0};
-PidState motorPid = {
-    12.0f,  // K1: angle gain
-    1.2f,   // K2: gyro gain
-    0.0f,   // K3: estimated wheel speed gain
-    {0.0f, 0.0f, 0.0f},  // target angles: X, Y, Z
-    {0.0f, 0.0f, 0.0f},  // estimated angles: X, Y, Z
-    {0.0f, 0.0f, 0.0f},  // zero offsets: X, Y, Z
-    {0.0f, 0.0f, 0.0f},  // gyro rates: X, Y, Z
-    {0.0f, 0.0f, 0.0f},  // PID outputs
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    BALANCE_OUTPUT_LIMIT,
-    0.0f,
-    false,  // start in manual mode
-    false,
-    {true, true, true},
-    {ESC_NEUTRAL, ESC_NEUTRAL, ESC_NEUTRAL},
-    {ESC_NEUTRAL, ESC_NEUTRAL, ESC_NEUTRAL}
-};
 
 int targetR = 200;
 int targetG = 50;
 int targetB = 255;
 
-// Raspberry Pi Bluetooth MAC address. Change this to your Pi's address if needed.
-uint8_t raspberryBtAddress[6] = {0xE4, 0x5F, 0x01, 0x7B, 0xE6, 0x3D};
-
-TaskHandle_t TaskLEDHandle;
-TaskHandle_t TaskSensorHandle;
-TaskHandle_t TaskBTHandle;
-TaskHandle_t TaskMotorHandle;
-
-void IRAM_ATTR dmpDataReady() {
-    mpuInterrupt = true;
-}
-
-static void recoverI2CBus() {
-    Serial.println("[2/6] Recovering I2C...");
-
-    pinMode(I2C_SDA_PIN, INPUT_PULLUP);
-    pinMode(I2C_SCL_PIN, INPUT_PULLUP);
-    delay(20);
-
-    if (digitalRead(I2C_SDA_PIN) == LOW) {
-        Serial.println("-> SDA is stuck LOW. Sending SCL pulses...");
-    }
-
-    pinMode(I2C_SCL_PIN, OUTPUT_OPEN_DRAIN);
-    for (int i = 0; i < 16; i++) {
-        digitalWrite(I2C_SCL_PIN, LOW);
-        delayMicroseconds(10);
-        digitalWrite(I2C_SCL_PIN, HIGH);
-        delayMicroseconds(10);
-    }
-
-    // Generate a STOP condition, then release both I2C lines.
-    pinMode(I2C_SDA_PIN, OUTPUT_OPEN_DRAIN);
-    digitalWrite(I2C_SDA_PIN, LOW);
-    delayMicroseconds(10);
-    digitalWrite(I2C_SCL_PIN, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(I2C_SDA_PIN, HIGH);
-    delayMicroseconds(10);
-
-    pinMode(I2C_SDA_PIN, INPUT_PULLUP);
-    pinMode(I2C_SCL_PIN, INPUT_PULLUP);
-    delay(20);
-
-    Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-    Wire.setClock(100000);
-
-    Serial.printf("-> I2C lines: SDA=%d SCL=%d\n", digitalRead(I2C_SDA_PIN), digitalRead(I2C_SCL_PIN));
-}
-
-static bool i2cDevicePresent(uint8_t addr) {
-    Wire.beginTransmission(addr);
-    return Wire.endTransmission() == 0;
-}
-
-static bool initMPU6050() {
-    Serial.println("[3/6] Starting MPU6050...");
-
-    if (!i2cDevicePresent(MPU_ADDR)) {
-        Serial.println("-> MPU6050 not found at 0x68. Check VCC/GND/SDA/SCL/AD0.");
-        return false;
-    }
-
-    accelgyro.initialize();
-    delay(50);
-
-    if (!accelgyro.testConnection()) {
-        Serial.println("-> MPU6050 testConnection() failed.");
-        return false;
-    }
-
-#if RUN_BOOT_CALIBRATION
-    Serial.println("-> MPU6050 connected. Calibrating, keep the cube still...");
-    accelgyro.CalibrateAccel(6);
-    yield();
-    accelgyro.CalibrateGyro(6);
-    yield();
-#else
-    Serial.println("-> MPU6050 connected. Boot calibration skipped.");
-#endif
-
-    accelgyro.setIntDataReadyEnabled(true);
-
-    pinMode(MPU_INT_PIN, INPUT);
-    attachInterrupt(digitalPinToInterrupt(MPU_INT_PIN), dmpDataReady, RISING);
-
-    Serial.println("[3/6] MPU6050 ready.");
-    return true;
-}
-
 static int clampEscAngle(int angle) {
-    return constrain(angle, ESC_MIN_ANGLE, ESC_MAX_ANGLE);
+    return constrain(angle, Config::ESC_MIN_ANGLE, Config::ESC_MAX_ANGLE);
 }
 
-static bool axisFromChar(char c, int *axis) {
-    c = toupper(c);
-    if (c == 'X') {
-        *axis = AXIS_X;
-        return true;
+static float elapsedSeconds(uint32_t *lastMicros, float fallbackSec) {
+    uint32_t nowMicros = micros();
+    float dtSec = (nowMicros - *lastMicros) / 1000000.0f;
+    *lastMicros = nowMicros;
+
+    if (dtSec <= 0.0f || dtSec > 0.2f) {
+        return fallbackSec;
     }
-    if (c == 'Y') {
-        *axis = AXIS_Y;
-        return true;
-    }
-    if (c == 'Z') {
-        *axis = AXIS_Z;
-        return true;
-    }
-    return false;
+    return dtSec;
 }
 
-static void writeEscSafe(int axis, int angle) {
-    if (axis < 0 || axis >= AXIS_COUNT) {
-        return;
-    }
-    motorESC[axis].write(clampEscAngle(angle));
+static void resetControllerLocked() {
+    balance.filteredGyroRateDps = 0.0f;
+    balance.proportionalTerm = 0.0f;
+    balance.integralTerm = 0.0f;
+    balance.derivativeTerm = 0.0f;
+    balance.outputCommand = 0.0f;
 }
 
-static void writeAllEscSafe(int angle) {
-    for (int axis = 0; axis < AXIS_COUNT; axis++) {
-        writeEscSafe(axis, angle);
-    }
+static void requestNeutralLocked() {
+    balance.balanceEnabled = false;
+    balance.manualEscAngle = Config::ESC_NEUTRAL;
+    balance.forceNeutral = true;
+    resetControllerLocked();
 }
 
-static void writeEscImmediate(int axis, int angle) {
-    if (axis < 0 || axis >= AXIS_COUNT) {
-        return;
+static int rampEscAngle(int current, int target, int maxStep) {
+    current = clampEscAngle(current);
+    target = clampEscAngle(target);
+    maxStep = max(1, maxStep);
+
+    int delta = target - current;
+    if (abs(delta) <= maxStep) {
+        return target;
     }
-    motorESC[axis].write(clampEscAngle(angle));
+    return current + ((delta > 0) ? maxStep : -maxStep);
 }
 
-static void writeAllEscImmediate(int angle) {
-    for (int axis = 0; axis < AXIS_COUNT; axis++) {
-        writeEscImmediate(axis, angle);
+static int commandToEscAngle(
+    float command,
+    float outputLimitDeg,
+    float minOutputDeg
+) {
+    command = constrain(command, -Config::COMMAND_LIMIT, Config::COMMAND_LIMIT);
+    if (fabsf(command) < Config::MOTOR_DEADBAND) {
+        return Config::ESC_NEUTRAL;
     }
-}
 
-static int pwmToEscAngle(float pwm, float outputLimitDeg, float minOutputDeg) {
-    pwm = constrain(pwm, -255.0f, 255.0f);
     outputLimitDeg = constrain(outputLimitDeg, 0.0f, 90.0f);
     minOutputDeg = constrain(minOutputDeg, 0.0f, outputLimitDeg);
 
-    float scaled = (pwm / 255.0f) * outputLimitDeg;
-    if (fabsf(scaled) > 0.1f && fabsf(scaled) < minOutputDeg) {
-        scaled = (scaled > 0.0f) ? minOutputDeg : -minOutputDeg;
+    float offsetDeg = (command / Config::COMMAND_LIMIT) * outputLimitDeg;
+    if (fabsf(offsetDeg) < minOutputDeg) {
+        offsetDeg = (offsetDeg > 0.0f) ? minOutputDeg : -minOutputDeg;
     }
-    return clampEscAngle(ESC_NEUTRAL + (int)round(scaled));
+
+    return clampEscAngle(
+        Config::ESC_NEUTRAL + static_cast<int>(roundf(offsetDeg))
+    );
 }
 
-static void xyToThreeWay(float pwmX, float pwmY, int escAngle[AXIS_COUNT], float outputLimitDeg, float minOutputDeg) {
-    float motorPwm[AXIS_COUNT];
+// Uses proportional-on-error, derivative-on-measurement, and a clamped
+// integrator, matching the control structure used by Arduino PID_v1.
+static float computeBalancePidLocked(
+    float errorDeg,
+    float gyroRateDps,
+    float dtSec
+) {
+    balance.proportionalTerm = balance.kp * errorDeg;
+    balance.derivativeTerm = -balance.kd * gyroRateDps;
 
-    motorPwm[AXIS_X] = pwmY;
-    motorPwm[AXIS_Y] = (-0.5f * pwmY) - (0.8660254f * pwmX);
-    motorPwm[AXIS_Z] = (-0.5f * pwmY) + (0.8660254f * pwmX);
-
-    for (int axis = 0; axis < AXIS_COUNT; axis++) {
-        motorPwm[axis] = constrain(motorPwm[axis] * motorDirection[axis], -255.0f, 255.0f);
-        escAngle[axis] = pwmToEscAngle(motorPwm[axis], outputLimitDeg, minOutputDeg);
+    bool integralActive =
+        fabsf(errorDeg) <= Config::INTEGRAL_ACTIVE_ANGLE_DEG &&
+        balance.ki > 0.0f;
+    if (integralActive) {
+        float nextIntegralTerm = constrain(
+            balance.integralTerm + (balance.ki * errorDeg * dtSec),
+            -Config::INTEGRAL_OUTPUT_LIMIT,
+            Config::INTEGRAL_OUTPUT_LIMIT
+        );
+        float candidate =
+            balance.proportionalTerm +
+            nextIntegralTerm +
+            balance.derivativeTerm;
+        bool pushesFurtherIntoSaturation =
+            (candidate > Config::COMMAND_LIMIT && errorDeg > 0.0f) ||
+            (candidate < -Config::COMMAND_LIMIT && errorDeg < 0.0f);
+        if (!pushesFurtherIntoSaturation) {
+            balance.integralTerm = nextIntegralTerm;
+        }
+    } else {
+        balance.integralTerm = 0.0f;
     }
+
+    float output =
+        balance.proportionalTerm +
+        balance.integralTerm +
+        balance.derivativeTerm;
+    balance.outputCommand = constrain(
+        output,
+        -Config::COMMAND_LIMIT,
+        Config::COMMAND_LIMIT
+    );
+    return balance.outputCommand;
+}
+
+static void recoverI2CBus() {
+    Serial.println("[2/6] Recovering I2C bus...");
+
+    pinMode(Config::I2C_SDA_PIN, INPUT_PULLUP);
+    pinMode(Config::I2C_SCL_PIN, INPUT_PULLUP);
+    delay(20);
+
+    if (digitalRead(Config::I2C_SDA_PIN) == LOW) {
+        pinMode(Config::I2C_SCL_PIN, OUTPUT_OPEN_DRAIN);
+        for (int pulse = 0; pulse < 16; pulse++) {
+            digitalWrite(Config::I2C_SCL_PIN, LOW);
+            delayMicroseconds(10);
+            digitalWrite(Config::I2C_SCL_PIN, HIGH);
+            delayMicroseconds(10);
+        }
+
+        pinMode(Config::I2C_SDA_PIN, OUTPUT_OPEN_DRAIN);
+        digitalWrite(Config::I2C_SDA_PIN, LOW);
+        delayMicroseconds(10);
+        digitalWrite(Config::I2C_SCL_PIN, HIGH);
+        delayMicroseconds(10);
+        digitalWrite(Config::I2C_SDA_PIN, HIGH);
+        delayMicroseconds(10);
+    }
+
+    pinMode(Config::I2C_SDA_PIN, INPUT_PULLUP);
+    pinMode(Config::I2C_SCL_PIN, INPUT_PULLUP);
+    Wire.begin(Config::I2C_SDA_PIN, Config::I2C_SCL_PIN);
+    Wire.setClock(100000);
+}
+
+static bool i2cDevicePresent(uint8_t address) {
+    Wire.beginTransmission(address);
+    return Wire.endTransmission() == 0;
+}
+
+static bool initializeMpu() {
+    Serial.println("[3/6] Starting MPU6050...");
+    if (!i2cDevicePresent(Config::MPU_ADDRESS)) {
+        Serial.println("-> MPU6050 not found at 0x68. Check wiring and AD0.");
+        return false;
+    }
+
+    mpu.initialize();
+    delay(50);
+    if (!mpu.testConnection()) {
+        Serial.println("-> MPU6050 connection test failed.");
+        return false;
+    }
+
+    if (Config::RUN_BOOT_CALIBRATION) {
+        Serial.println("-> Calibrating MPU6050. Keep the cube still...");
+        mpu.CalibrateAccel(6);
+        yield();
+        mpu.CalibrateGyro(6);
+        yield();
+    }
+
+    Serial.println("-> MPU6050 ready. Balance input is the physical X axis.");
+    return true;
+}
+
+static void writeMotorEsc(int angle) {
+    motorEsc.write(clampEscAngle(angle));
 }
 
 static void setLedColor(int r, int g, int b) {
@@ -290,313 +292,400 @@ static void setLedColor(int r, int g, int b) {
     }
 }
 
-static void setManualMotorAngle(int axis, int angle) {
-    if (xSemaphoreTake(pidMutex, pdMS_TO_TICKS(20))) {
-        motorPid.autoMode = false;
-        motorPid.fault = false;
-        motorPid.motorEnabled[axis] = true;
-        motorPid.manualEscAngle[axis] = clampEscAngle(angle);
-        xSemaphoreGive(pidMutex);
+static void setManualEscAngle(int angle) {
+    if (xSemaphoreTake(balanceMutex, pdMS_TO_TICKS(20))) {
+        balance.balanceEnabled = false;
+        balance.motorEnabled = true;
+        balance.fault = false;
+        balance.manualEscAngle = clampEscAngle(angle);
+        balance.forceNeutral = false;
+        resetControllerLocked();
+        xSemaphoreGive(balanceMutex);
     }
 }
 
-static void setOneManualMotorAngle(int axis, int angle) {
-    if (xSemaphoreTake(pidMutex, pdMS_TO_TICKS(20))) {
-        motorPid.autoMode = false;
-        motorPid.fault = false;
-        for (int i = 0; i < AXIS_COUNT; i++) {
-            motorPid.motorEnabled[i] = (i == axis);
-            motorPid.manualEscAngle[i] = ESC_NEUTRAL;
+static void stopMotor(bool disableMotor) {
+    if (xSemaphoreTake(balanceMutex, pdMS_TO_TICKS(20))) {
+        requestNeutralLocked();
+        balance.motorEnabled = !disableMotor;
+        xSemaphoreGive(balanceMutex);
+    }
+}
+
+static bool setBalanceEnabled(bool enabled) {
+    bool success = true;
+    if (xSemaphoreTake(balanceMutex, pdMS_TO_TICKS(20))) {
+        if (enabled && !mpuReady) {
+            requestNeutralLocked();
+            balance.fault = true;
+            success = false;
+        } else if (enabled) {
+            balance.balanceEnabled = true;
+            balance.motorEnabled = true;
+            balance.manualEscAngle = Config::ESC_NEUTRAL;
+            balance.forceNeutral = false;
+            balance.fault = false;
+            resetControllerLocked();
+        } else {
+            requestNeutralLocked();
         }
-        motorPid.manualEscAngle[axis] = clampEscAngle(angle);
-        xSemaphoreGive(pidMutex);
+        xSemaphoreGive(balanceMutex);
+    } else {
+        success = false;
     }
+    return success;
 }
 
-static void setAllManualMotorAngles(int angle) {
-    if (xSemaphoreTake(pidMutex, pdMS_TO_TICKS(20))) {
-        motorPid.fault = false;
-        motorPid.autoMode = false;
-        for (int axis = 0; axis < AXIS_COUNT; axis++) {
-            motorPid.motorEnabled[axis] = true;
-            motorPid.manualEscAngle[axis] = clampEscAngle(angle);
+static float setBalanceTarget(float targetDeg, bool *started) {
+    float limitedTarget = constrain(
+        targetDeg,
+        -Config::TARGET_LIMIT_DEG,
+        Config::TARGET_LIMIT_DEG
+    );
+    *started = false;
+
+    if (xSemaphoreTake(balanceMutex, pdMS_TO_TICKS(20))) {
+        balance.targetAngleDeg = limitedTarget;
+        if (mpuReady) {
+            balance.balanceEnabled = true;
+            balance.motorEnabled = true;
+            balance.manualEscAngle = Config::ESC_NEUTRAL;
+            balance.forceNeutral = false;
+            balance.fault = false;
+            resetControllerLocked();
+            *started = true;
+        } else {
+            requestNeutralLocked();
+            balance.fault = true;
         }
-        xSemaphoreGive(pidMutex);
+        xSemaphoreGive(balanceMutex);
+    }
+    return limitedTarget;
+}
+
+static void setPidTunings(float kp, float ki, float kd) {
+    if (xSemaphoreTake(balanceMutex, pdMS_TO_TICKS(20))) {
+        balance.kp = constrain(kp, 0.0f, 100.0f);
+        balance.ki = constrain(ki, 0.0f, 50.0f);
+        balance.kd = constrain(kd, 0.0f, 50.0f);
+        resetControllerLocked();
+        xSemaphoreGive(balanceMutex);
     }
 }
 
-static void setOnlyMotorEnabled(int axis) {
-    if (xSemaphoreTake(pidMutex, pdMS_TO_TICKS(20))) {
-        for (int i = 0; i < AXIS_COUNT; i++) {
-            motorPid.motorEnabled[i] = (i == axis);
-            if (i != axis) {
-                motorPid.manualEscAngle[i] = ESC_NEUTRAL;
-                motorPid.escAngle[i] = ESC_NEUTRAL;
-            }
-        }
-        motorPid.motorSpeedX = 0.0f;
-        motorPid.motorSpeedY = 0.0f;
-        motorPid.fault = false;
-        xSemaphoreGive(pidMutex);
+static void setOutputRange(float outputLimitDeg, float minOutputDeg) {
+    if (xSemaphoreTake(balanceMutex, pdMS_TO_TICKS(20))) {
+        balance.outputLimitDeg = constrain(outputLimitDeg, 0.0f, 90.0f);
+        balance.minOutputDeg = constrain(
+            minOutputDeg,
+            0.0f,
+            balance.outputLimitDeg
+        );
+        resetControllerLocked();
+        xSemaphoreGive(balanceMutex);
     }
 }
 
-static void setAllMotorsEnabled(bool enabled) {
-    if (xSemaphoreTake(pidMutex, pdMS_TO_TICKS(20))) {
-        for (int i = 0; i < AXIS_COUNT; i++) {
-            motorPid.motorEnabled[i] = enabled;
-            if (!enabled) {
-                motorPid.manualEscAngle[i] = ESC_NEUTRAL;
-                motorPid.escAngle[i] = ESC_NEUTRAL;
-            }
-        }
-        motorPid.motorSpeedX = 0.0f;
-        motorPid.motorSpeedY = 0.0f;
-        motorPid.fault = false;
-        xSemaphoreGive(pidMutex);
+static void setMotorDirection(int direction) {
+    if (xSemaphoreTake(balanceMutex, pdMS_TO_TICKS(20))) {
+        balance.motorDirection = (direction < 0) ? -1 : 1;
+        requestNeutralLocked();
+        xSemaphoreGive(balanceMutex);
     }
 }
 
-static void setPidTargets(float x, float y, float z) {
-    if (xSemaphoreTake(pidMutex, pdMS_TO_TICKS(20))) {
-        motorPid.setpointDeg[AXIS_X] = x;
-        motorPid.setpointDeg[AXIS_Y] = y;
-        motorPid.setpointDeg[AXIS_Z] = z;
-        for (int axis = 0; axis < AXIS_COUNT; axis++) {
-            motorPid.pidOutput[axis] = 0.0f;
-        }
-        motorPid.motorSpeedX = 0.0f;
-        motorPid.motorSpeedY = 0.0f;
-        motorPid.autoMode = true;
-        motorPid.fault = false;
-        xSemaphoreGive(pidMutex);
-    }
-}
-
-static void setPidTunings(float k1, float k2, float k3) {
-    if (xSemaphoreTake(pidMutex, pdMS_TO_TICKS(20))) {
-        motorPid.k1 = k1;
-        motorPid.k2 = k2;
-        motorPid.k3 = k3;
-        for (int axis = 0; axis < AXIS_COUNT; axis++) {
-            motorPid.pidOutput[axis] = 0.0f;
-        }
-        motorPid.motorSpeedX = 0.0f;
-        motorPid.motorSpeedY = 0.0f;
-        motorPid.fault = false;
-        xSemaphoreGive(pidMutex);
-    }
-}
-
-static void setPidOutputRange(float outputLimitDeg, float minOutputDeg) {
-    if (xSemaphoreTake(pidMutex, pdMS_TO_TICKS(20))) {
-        motorPid.outputLimitDeg = constrain(outputLimitDeg, 0.0f, 90.0f);
-        motorPid.minOutputDeg = constrain(minOutputDeg, 0.0f, motorPid.outputLimitDeg);
-        motorPid.motorSpeedX = 0.0f;
-        motorPid.motorSpeedY = 0.0f;
-        motorPid.fault = false;
-        xSemaphoreGive(pidMutex);
+static void zeroBalanceAngle() {
+    if (xSemaphoreTake(balanceMutex, pdMS_TO_TICKS(20))) {
+        requestNeutralLocked();
+        balance.angleOffsetDeg += balance.angleDeg;
+        balance.angleDeg = 0.0f;
+        balance.fault = false;
+        xSemaphoreGive(balanceMutex);
     }
 }
 
 static void printHelp() {
     Serial.println();
-    Serial.println("Commands:");
-    Serial.println("   LED R G B       -> set NeoPixel color, example: LED 255 0 100");
-    Serial.println("    M angle        -> set all motors manually, 0~180, 90 is neutral");
-    Serial.println("  M X|Y|Z angle    -> set one motor manually");
-    Serial.println("  ONE X|Y|Z angle  -> set only one motor, others neutral");
-    Serial.println("  ENABLE X|Y|Z     -> allow only one motor in AUTO output");
-    Serial.println("  ENABLE ALL       -> allow all motors in AUTO output");
-    Serial.println("  DISABLE ALL      -> force all motors neutral");
-    Serial.println("  TARGET X Y Z     -> enable PID mode and set XYZ targets");
-    Serial.println("  PID K1 K2 K3     -> set cube gains: angle, gyro, wheel-speed");
-    Serial.println("  OUT limit min     -> set auto ESC output degrees from neutral");
-    Serial.println("  DIR X|Y|Z 1|-1   -> reverse one motor direction");
-    Serial.println("    AUTO 0|1       -> disable/enable PID mode");
-    Serial.println("      ZERO         -> set current XYZ angles as 0 deg");
-    Serial.println("    BTSTATUS       -> print Bluetooth target and connection state");
-    Serial.println("     STATUS        -> print motor PID state");
+    Serial.println("Single-axis balancing commands (MPU X -> motor Z):");
+    Serial.println("  LED R G B          set NeoPixel color");
+    Serial.println("  M angle            manual Z ESC angle, 90 is neutral");
+    Serial.println("  M Z angle          same as M angle");
+    Serial.println("  STOP               stop Z motor immediately");
+    Serial.println("  ENABLE Z           enable manual Z motor control");
+    Serial.println("  DISABLE Z          disable Z motor and force neutral");
+    Serial.println("  TARGET deg         set target (-15..15) and start balance");
+    Serial.println("  PID Kp Ki Kd       set angle PID gains");
+    Serial.println("  OUT limit min      set ESC offsets from neutral (0..90)");
+    Serial.println("  DIR Z 1|-1         set Z motor direction, then stop");
+    Serial.println("  BALANCE ON|OFF     start or stop balancing");
+    Serial.println("  ZERO               stop and zero the current X angle");
+    Serial.println("  STATUS             print controller state");
+    Serial.println("  BTSTATUS           print Bluetooth state");
+    Serial.println("  APPSTATE           send one app state line over Bluetooth");
     Serial.println();
 }
 
-static void printBluetoothStatus() {
+static void refreshBluetoothConnection() {
     bluetoothConnected = bluetoothReady && SerialBT.connected();
-    Serial.printf(
-        "-> [BT] ready=%s connected=%s local=%s target=%02X:%02X:%02X:%02X:%02X:%02X\n",
-        bluetoothReady ? "YES" : "NO",
-        bluetoothConnected ? "YES" : "NO",
-        btDeviceName,
-        raspberryBtAddress[0],
-        raspberryBtAddress[1],
-        raspberryBtAddress[2],
-        raspberryBtAddress[3],
-        raspberryBtAddress[4],
-        raspberryBtAddress[5]
+    digitalWrite(
+        Config::CHECK_LED_PIN,
+        bluetoothConnected ? LOW : HIGH
     );
-    Serial.printf("-> [BT] RFCOMM channel=%d\n", BT_RFCOMM_CHANNEL);
 }
 
-static void tryBluetoothConnect() {
-    if (!bluetoothReady || SerialBT.connected()) {
-        bluetoothConnected = bluetoothReady && SerialBT.connected();
+static void printBluetoothStatus() {
+    refreshBluetoothConnection();
+    Serial.printf(
+        "-> [BT] ready=%s connected=%s name=%s channel=%d\n",
+        bluetoothReady ? "YES" : "NO",
+        bluetoothConnected ? "YES" : "NO",
+        Config::BT_DEVICE_NAME,
+        Config::BT_RFCOMM_CHANNEL
+    );
+}
+
+static BalanceState getBalanceSnapshot() {
+    BalanceState snapshot;
+    if (xSemaphoreTake(balanceMutex, pdMS_TO_TICKS(20))) {
+        snapshot = balance;
+        xSemaphoreGive(balanceMutex);
+    }
+    return snapshot;
+}
+
+static void printStatus() {
+    BalanceState state = getBalanceSnapshot();
+    Serial.printf(
+        "-> [STATUS] mpu=%s mode=%s fault=%s sensor=X motor=Z enabled=%d\n",
+        mpuReady ? "READY" : "NOT_READY",
+        state.balanceEnabled ? "BALANCE" : "MANUAL",
+        state.fault ? "YES" : "NO",
+        state.motorEnabled ? 1 : 0
+    );
+    Serial.printf(
+        "   angle=%.2f target=%.2f gyro=%.2f offset=%.2f\n",
+        state.angleDeg,
+        state.targetAngleDeg,
+        state.gyroRateDps,
+        state.angleOffsetDeg
+    );
+    Serial.printf(
+        "   Kp=%.3f Ki=%.3f Kd=%.3f P=%.2f I=%.2f D=%.2f command=%.2f\n",
+        state.kp,
+        state.ki,
+        state.kd,
+        state.proportionalTerm,
+        state.integralTerm,
+        state.derivativeTerm,
+        state.outputCommand
+    );
+    Serial.printf(
+        "   outLimit=%.1f minOut=%.1f dir=%d pwm=%d\n",
+        state.outputLimitDeg,
+        state.minOutputDeg,
+        state.motorDirection,
+        state.escAngle
+    );
+}
+
+static void sendAppStateLine() {
+    if (!bluetoothReady || !SerialBT.connected()) {
         return;
     }
 
-    Serial.println("-> [BT] connecting to Raspberry Pi...");
-    bluetoothConnected = SerialBT.connect(raspberryBtAddress, BT_RFCOMM_CHANNEL);
-    digitalWrite(CHECK_LED, bluetoothConnected ? LOW : HIGH);
-    Serial.printf("-> [BT] Raspberry Pi connection: %s\n", bluetoothConnected ? "OK" : "FAILED");
+    BalanceState state = getBalanceSnapshot();
+    int r = 0;
+    int g = 0;
+    int b = 0;
+    if (xSemaphoreTake(ledMutex, pdMS_TO_TICKS(20))) {
+        r = targetR;
+        g = targetG;
+        b = targetB;
+        xSemaphoreGive(ledMutex);
+    }
+
+    SerialBT.printf(
+        "STATE mpu=%d auto=%d fault=%d led=%d,%d,%d "
+        "kp=%.3f ki=%.3f kd=%.3f kw=0.000 sensor=0.0 "
+        "out=%.1f min=%.1f ex=0 ey=0 ez=%d mx=90 my=90 mz=%d "
+        "x=%.2f y=0.00 z=0.00\n",
+        mpuReady ? 1 : 0,
+        state.balanceEnabled ? 1 : 0,
+        state.fault ? 1 : 0,
+        r,
+        g,
+        b,
+        state.kp,
+        state.ki,
+        state.kd,
+        state.outputLimitDeg,
+        state.minOutputDeg,
+        state.motorEnabled ? 1 : 0,
+        state.escAngle,
+        state.angleDeg
+    );
+}
+
+static bool commandUsesZAxis(char axisChar) {
+    return toupper(static_cast<unsigned char>(axisChar)) == 'Z';
 }
 
 static void handleCommand(String line) {
     line.trim();
     line.toUpperCase();
-
     if (line.length() == 0) {
         return;
     }
 
-    int r, g, b, angle, autoValue, directionValue;
+    if (line == "CONNECTED TO BLUETOOTH SERVER" ||
+        line == "UNDEFINED VALUE" ||
+        line == "NO VALUE" ||
+        line == "LED TOGGLED") {
+        return;
+    }
+
+    int r, g, b, angle, direction, enabled;
+    float targetDeg, kp, ki, kd, outputLimitDeg, minOutputDeg;
     char axisChar;
-    int axis = -1;
-    float targetX, targetY, targetZ, k1, k2, k3, outputLimitDeg, minOutputDeg;
 
     if (sscanf(line.c_str(), "LED %d %d %d", &r, &g, &b) == 3 ||
         sscanf(line.c_str(), "%d %d %d", &r, &g, &b) == 3) {
         setLedColor(r, g, b);
-        Serial.printf("-> [LED] R=%d G=%d B=%d\n", constrain(r, 0, 255), constrain(g, 0, 255), constrain(b, 0, 255));
-        return;
-    }
-
-    if (sscanf(line.c_str(), "M %c %d", &axisChar, &angle) == 2 && axisFromChar(axisChar, &axis)) {
-        setManualMotorAngle(axis, angle);
-        Serial.printf("-> [MOTOR %c] manual ESC angle: %d\n", axisNames[axis], clampEscAngle(angle));
-        return;
-    }
-
-    if (sscanf(line.c_str(), "ONE %c %d", &axisChar, &angle) == 2 && axisFromChar(axisChar, &axis)) {
-        setOneManualMotorAngle(axis, angle);
-        Serial.printf("-> [MOTOR ONLY %c] manual ESC angle: %d, others neutral\n", axisNames[axis], clampEscAngle(angle));
+        Serial.printf(
+            "-> [LED] R=%d G=%d B=%d\n",
+            constrain(r, 0, 255),
+            constrain(g, 0, 255),
+            constrain(b, 0, 255)
+        );
         return;
     }
 
     if (sscanf(line.c_str(), "M %d", &angle) == 1 ||
         sscanf(line.c_str(), "MOTOR %d", &angle) == 1) {
-        setAllManualMotorAngles(angle);
-        Serial.printf("-> [MOTOR ALL] manual ESC angle: %d\n", clampEscAngle(angle));
+        setManualEscAngle(angle);
+        Serial.printf("-> [MOTOR Z] manual ESC angle=%d\n", clampEscAngle(angle));
         return;
     }
 
-    if (sscanf(line.c_str(), "TARGET %f %f %f", &targetX, &targetY, &targetZ) == 3) {
-        setPidTargets(targetX, targetY, targetZ);
-        Serial.printf("-> [PID] target XYZ: %.2f %.2f %.2f deg\n", targetX, targetY, targetZ);
-        return;
-    }
-
-    if (sscanf(line.c_str(), "PID %f %f %f", &k1, &k2, &k3) == 3) {
-        setPidTunings(k1, k2, k3);
-        Serial.printf("-> [PID] K1=%.3f K2=%.3f K3=%.3f\n", k1, k2, k3);
-        return;
-    }
-
-    if (sscanf(line.c_str(), "OUT %f %f", &outputLimitDeg, &minOutputDeg) == 2) {
-        setPidOutputRange(outputLimitDeg, minOutputDeg);
-        Serial.printf("-> [PID] output limit=%.1f min=%.1f deg\n", constrain(outputLimitDeg, 0.0f, 90.0f), constrain(minOutputDeg, 0.0f, constrain(outputLimitDeg, 0.0f, 90.0f)));
-        return;
-    }
-
-    if (sscanf(line.c_str(), "DIR %c %d", &axisChar, &directionValue) == 2 && axisFromChar(axisChar, &axis)) {
-        motorDirection[axis] = (directionValue < 0) ? -1 : 1;
-        Serial.printf("-> [DIR %c] %d\n", axisNames[axis], motorDirection[axis]);
-        return;
-    }
-
-    if (sscanf(line.c_str(), "ENABLE %c", &axisChar) == 1 && axisFromChar(axisChar, &axis)) {
-        setOnlyMotorEnabled(axis);
-        Serial.printf("-> [ENABLE] only motor %c enabled\n", axisNames[axis]);
-        return;
-    }
-
-    if (line == "ENABLE ALL") {
-        setAllMotorsEnabled(true);
-        Serial.println("-> [ENABLE] all motors enabled");
-        return;
-    }
-
-    if (line == "DISABLE ALL" || line == "ENABLE NONE") {
-        setAllMotorsEnabled(false);
-        Serial.println("-> [ENABLE] all motors disabled, ESC neutral");
-        return;
-    }
-
-    if (sscanf(line.c_str(), "AUTO %d", &autoValue) == 1) {
-        if (xSemaphoreTake(pidMutex, pdMS_TO_TICKS(20))) {
-            motorPid.autoMode = (autoValue != 0);
-            for (int i = 0; i < AXIS_COUNT; i++) {
-                motorPid.pidOutput[i] = 0.0f;
-            }
-            motorPid.motorSpeedX = 0.0f;
-            motorPid.motorSpeedY = 0.0f;
-            motorPid.fault = false;
-            xSemaphoreGive(pidMutex);
+    if (sscanf(line.c_str(), "M %c %d", &axisChar, &angle) == 2) {
+        if (!commandUsesZAxis(axisChar)) {
+            Serial.println("-> Only motor Z is available in single-axis mode.");
+            return;
         }
-        Serial.printf("-> [PID] auto mode: %s\n", autoValue ? "ON" : "OFF");
+        setManualEscAngle(angle);
+        Serial.printf("-> [MOTOR Z] manual ESC angle=%d\n", clampEscAngle(angle));
+        return;
+    }
+
+    if (line == "STOP" || line == "M STOP") {
+        stopMotor(false);
+        Serial.println("-> [MOTOR Z] stopped at neutral.");
+        return;
+    }
+
+    if (sscanf(line.c_str(), "TARGET %f", &targetDeg) == 1) {
+        bool started = false;
+        float actualTarget = setBalanceTarget(targetDeg, &started);
+        Serial.printf(
+            "-> [PID] target=%.2f deg, balance=%s\n",
+            actualTarget,
+            started ? "ON" : "FAILED: MPU NOT READY"
+        );
+        return;
+    }
+
+    if (sscanf(line.c_str(), "PID %f %f %f", &kp, &ki, &kd) == 3) {
+        setPidTunings(kp, ki, kd);
+        BalanceState state = getBalanceSnapshot();
+        Serial.printf(
+            "-> [PID] Kp=%.3f Ki=%.3f Kd=%.3f\n",
+            state.kp,
+            state.ki,
+            state.kd
+        );
+        return;
+    }
+
+    if (sscanf(
+            line.c_str(),
+            "OUT %f %f",
+            &outputLimitDeg,
+            &minOutputDeg
+        ) == 2) {
+        setOutputRange(outputLimitDeg, minOutputDeg);
+        BalanceState state = getBalanceSnapshot();
+        Serial.printf(
+            "-> [PID] output limit=%.1f min=%.1f deg\n",
+            state.outputLimitDeg,
+            state.minOutputDeg
+        );
+        return;
+    }
+
+    if (sscanf(line.c_str(), "DIR %c %d", &axisChar, &direction) == 2) {
+        if (!commandUsesZAxis(axisChar)) {
+            Serial.println("-> Only motor Z direction can be changed.");
+            return;
+        }
+        setMotorDirection(direction);
+        Serial.printf(
+            "-> [DIR Z] %d, motor stopped\n",
+            getBalanceSnapshot().motorDirection
+        );
+        return;
+    }
+
+    if (line == "ENABLE Z" || line == "ENABLE") {
+        if (xSemaphoreTake(balanceMutex, pdMS_TO_TICKS(20))) {
+            balance.motorEnabled = true;
+            balance.fault = false;
+            xSemaphoreGive(balanceMutex);
+        }
+        Serial.println("-> [MOTOR Z] enabled.");
+        return;
+    }
+
+    if (line == "DISABLE Z" || line == "DISABLE ALL" ||
+        line == "ENABLE NONE") {
+        stopMotor(true);
+        Serial.println("-> [MOTOR Z] disabled and neutral.");
+        return;
+    }
+
+    if (sscanf(line.c_str(), "AUTO %d", &enabled) == 1) {
+        bool success = setBalanceEnabled(enabled != 0);
+        Serial.printf(
+            "-> [PID] balance=%s\n",
+            enabled ? (success ? "ON" : "FAILED: MPU NOT READY") : "OFF"
+        );
+        return;
+    }
+
+    if (line == "BALANCE ON" || line == "BALANCE 1" ||
+        line == "BALANCE START") {
+        bool success = setBalanceEnabled(true);
+        Serial.printf(
+            "-> [PID] balance=%s\n",
+            success ? "ON" : "FAILED: MPU NOT READY"
+        );
+        return;
+    }
+
+    if (line == "BALANCE OFF" || line == "BALANCE 0" ||
+        line == "BALANCE STOP") {
+        setBalanceEnabled(false);
+        Serial.println("-> [PID] balance=OFF, ESC neutral.");
         return;
     }
 
     if (line == "ZERO") {
-        if (xSemaphoreTake(pidMutex, pdMS_TO_TICKS(20))) {
-            for (int i = 0; i < AXIS_COUNT; i++) {
-                motorPid.angleOffsetDeg[i] += motorPid.currentDeg[i];
-                motorPid.currentDeg[i] = 0.0f;
-                motorPid.pidOutput[i] = 0.0f;
-            }
-            motorPid.motorSpeedX = 0.0f;
-            motorPid.motorSpeedY = 0.0f;
-            motorPid.fault = false;
-            xSemaphoreGive(pidMutex);
-        }
-        Serial.println("-> [PID] current XYZ angles zeroed.");
+        zeroBalanceAngle();
+        Serial.println("-> [SENSOR X] angle zeroed, balance stopped.");
         return;
     }
 
     if (line == "STATUS") {
-        if (xSemaphoreTake(pidMutex, pdMS_TO_TICKS(20))) {
-            Serial.printf(
-                "-> [STATUS] mpu=%s mode=%s fault=%s K1=%.3f K2=%.3f K3=%.3f outLimit=%.1f minOut=%.1f speedX=%.2f speedY=%.2f\n",
-                mpuReady ? "READY" : "NOT_READY",
-                motorPid.autoMode ? "AUTO" : "MANUAL",
-                motorPid.fault ? "YES" : "NO",
-                motorPid.k1,
-                motorPid.k2,
-                motorPid.k3,
-                motorPid.outputLimitDeg,
-                motorPid.minOutputDeg,
-                motorPid.motorSpeedX,
-                motorPid.motorSpeedY
-            );
-            for (int i = 0; i < AXIS_COUNT; i++) {
-                Serial.printf(
-                    "   %c en=%d target=%.2f current=%.2f offset=%.2f gyro=%.2f out=%.2f dir=%d esc=%d\n",
-                    axisNames[i],
-                    motorPid.motorEnabled[i] ? 1 : 0,
-                    motorPid.setpointDeg[i],
-                    motorPid.currentDeg[i],
-                    motorPid.angleOffsetDeg[i],
-                    motorPid.gyroRateDps[i],
-                    motorPid.pidOutput[i],
-                    motorDirection[i],
-                    motorPid.escAngle[i]
-                );
-            }
-            xSemaphoreGive(pidMutex);
-        }
-        return;
-    }
-
-    if (line == "HELP" || line == "?") {
-        printHelp();
+        printStatus();
         return;
     }
 
@@ -605,16 +694,26 @@ static void handleCommand(String line) {
         return;
     }
 
+    if (line == "APPSTATE") {
+        sendAppStateLine();
+        return;
+    }
+
+    if (line == "HELP" || line == "?") {
+        printHelp();
+        return;
+    }
+
     Serial.println("-> Unknown command. Type HELP.");
 }
 
-void TaskLED(void *pvParameters) {
+void TaskLed(void *parameter) {
+    TickType_t lastWake = xTaskGetTickCount();
+
     for (;;) {
-        float timeSec = millis() / 1000.0f;
         int r = 0;
         int g = 0;
         int b = 0;
-
         if (xSemaphoreTake(ledMutex, portMAX_DELAY)) {
             r = targetR;
             g = targetG;
@@ -622,23 +721,29 @@ void TaskLED(void *pvParameters) {
             xSemaphoreGive(ledMutex);
         }
 
-        for (int i = 0; i < NUMPIXELS; i++) {
-            float pulse = (sin(timeSec * 1.5f + i * 0.4f) + 1.0f) / 2.0f;
-            float intensity = 0.3f + (pulse * 0.6f);
-            strip.setPixelColor(i, strip.Color(
-                (uint8_t)(r * intensity),
-                (uint8_t)(g * intensity),
-                (uint8_t)(b * intensity)
-            ));
+        float timeSec = millis() / 1000.0f;
+        for (int pixel = 0; pixel < Config::LED_COUNT; pixel++) {
+            float pulse =
+                (sinf(timeSec * 1.5f + pixel * 0.4f) + 1.0f) * 0.5f;
+            float intensity = 0.3f + pulse * 0.6f;
+            strip.setPixelColor(
+                pixel,
+                strip.Color(
+                    static_cast<uint8_t>(r * intensity),
+                    static_cast<uint8_t>(g * intensity),
+                    static_cast<uint8_t>(b * intensity)
+                )
+            );
         }
         strip.show();
-        vTaskDelay(pdMS_TO_TICKS(30));
+        vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(30));
     }
 }
 
-void TaskSensor(void *pvParameters) {
+void TaskSensor(void *parameter) {
     TickType_t lastWake = xTaskGetTickCount();
     uint32_t lastMicros = micros();
+    float filteredAngleDeg = 0.0f;
     bool filterInitialized = false;
 
     for (;;) {
@@ -647,228 +752,205 @@ void TaskSensor(void *pvParameters) {
             continue;
         }
 
-        SensorData sample;
-        accelgyro.getMotion6(&sample.ax, &sample.ay, &sample.az, &sample.gx, &sample.gy, &sample.gz);
+        int16_t ax, ay, az, gx, gy, gz;
+        mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+        float dtSec = elapsedSeconds(
+            &lastMicros,
+            Config::SENSOR_LOOP_MS / 1000.0f
+        );
 
-        uint32_t nowMicros = micros();
-        float dt = (nowMicros - lastMicros) / 1000000.0f;
-        lastMicros = nowMicros;
-        if (dt <= 0.0f || dt > 0.2f) {
-            dt = 0.01f;
-        }
+        float accelAngleXDeg =
+            atan2f(static_cast<float>(ay), static_cast<float>(az)) *
+            RAD_TO_DEG;
+        float gyroRateXDps = gx / 131.0f;
 
-        if (xSemaphoreTake(sensorMutex, pdMS_TO_TICKS(5))) {
-            currentData = sample;
-            xSemaphoreGive(sensorMutex);
-        }
-
-        float accelAngleX = atan2f((float)sample.ay, (float)sample.az) * RAD_TO_DEG;
-        float accelAngleY = atan2f(-(float)sample.ax, sqrtf((float)sample.ay * sample.ay + (float)sample.az * sample.az)) * RAD_TO_DEG;
-        float gyroRate[AXIS_COUNT] = {
-            sample.gx / 131.0f,
-            sample.gy / 131.0f,
-            sample.gz / 131.0f
-        };
-
-        if (xSemaphoreTake(pidMutex, pdMS_TO_TICKS(5))) {
+        if (xSemaphoreTake(balanceMutex, pdMS_TO_TICKS(5))) {
             if (!filterInitialized) {
-                motorPid.currentDeg[AXIS_X] = accelAngleX - motorPid.angleOffsetDeg[AXIS_X];
-                motorPid.currentDeg[AXIS_Y] = accelAngleY - motorPid.angleOffsetDeg[AXIS_Y];
-                motorPid.currentDeg[AXIS_Z] = 0.0f;
+                filteredAngleDeg = accelAngleXDeg;
                 filterInitialized = true;
             } else {
-                float rawX = motorPid.currentDeg[AXIS_X] + motorPid.angleOffsetDeg[AXIS_X];
-                float rawY = motorPid.currentDeg[AXIS_Y] + motorPid.angleOffsetDeg[AXIS_Y];
-                float rawZ = motorPid.currentDeg[AXIS_Z] + motorPid.angleOffsetDeg[AXIS_Z];
-
-                rawX = (COMPLEMENTARY_ALPHA * (rawX + gyroRate[AXIS_X] * dt)) +
-                       ((1.0f - COMPLEMENTARY_ALPHA) * accelAngleX);
-                rawY = (COMPLEMENTARY_ALPHA * (rawY + gyroRate[AXIS_Y] * dt)) +
-                       ((1.0f - COMPLEMENTARY_ALPHA) * accelAngleY);
-                rawZ += gyroRate[AXIS_Z] * dt;
-
-                motorPid.currentDeg[AXIS_X] = rawX - motorPid.angleOffsetDeg[AXIS_X];
-                motorPid.currentDeg[AXIS_Y] = rawY - motorPid.angleOffsetDeg[AXIS_Y];
-                motorPid.currentDeg[AXIS_Z] = rawZ - motorPid.angleOffsetDeg[AXIS_Z];
+                filteredAngleDeg =
+                    Config::COMPLEMENTARY_ALPHA *
+                        (filteredAngleDeg + gyroRateXDps * dtSec) +
+                    (1.0f - Config::COMPLEMENTARY_ALPHA) * accelAngleXDeg;
             }
 
-            for (int axis = 0; axis < AXIS_COUNT; axis++) {
-                motorPid.gyroRateDps[axis] = gyroRate[axis];
-            }
-            xSemaphoreGive(pidMutex);
+            balance.angleDeg = filteredAngleDeg - balance.angleOffsetDeg;
+            balance.gyroRateDps = gyroRateXDps;
+            xSemaphoreGive(balanceMutex);
         }
 
-        vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(10));
+        vTaskDelayUntil(
+            &lastWake,
+            pdMS_TO_TICKS(Config::SENSOR_LOOP_MS)
+        );
     }
 }
 
-void TaskMotor(void *pvParameters) {
-    writeAllEscImmediate(ESC_NEUTRAL);
-    Serial.println("-> [MOTOR] ESC arming all motors at neutral for 5 seconds...");
-    vTaskDelay(pdMS_TO_TICKS(5000));
+void TaskMotor(void *parameter) {
+    writeMotorEsc(Config::ESC_NEUTRAL);
+    Serial.println("-> [MOTOR Z] arming ESC at neutral for 5 seconds...");
+    vTaskDelay(pdMS_TO_TICKS(Config::ESC_ARM_TIME_MS));
 
-    const float alpha = 0.7f;
+    uint32_t lastMicros = micros();
+    int commandedEscAngle = Config::ESC_NEUTRAL;
 
     for (;;) {
-        int escAngle[AXIS_COUNT] = {ESC_NEUTRAL, ESC_NEUTRAL, ESC_NEUTRAL};
+        float dtSec = elapsedSeconds(
+            &lastMicros,
+            Config::CONTROL_DT_FALLBACK_SEC
+        );
+        int requestedEscAngle = Config::ESC_NEUTRAL;
+        bool useAutoRamp = false;
+        bool forceNeutral = false;
 
-        if (xSemaphoreTake(pidMutex, pdMS_TO_TICKS(10))) {
-            if (motorPid.autoMode) {
-                if (fabsf(motorPid.currentDeg[AXIS_X]) > BALANCE_FALL_ANGLE ||
-                    fabsf(motorPid.currentDeg[AXIS_Y]) > BALANCE_FALL_ANGLE) {
-                    motorPid.fault = true;
-                    motorPid.autoMode = false;
-                    for (int axis = 0; axis < AXIS_COUNT; axis++) {
-                        motorPid.pidOutput[axis] = 0.0f;
-                        escAngle[axis] = ESC_NEUTRAL;
-                    }
-                    motorPid.motorSpeedX = 0.0f;
-                    motorPid.motorSpeedY = 0.0f;
+        if (xSemaphoreTake(balanceMutex, pdMS_TO_TICKS(10))) {
+            if (!balance.motorEnabled) {
+                requestNeutralLocked();
+                forceNeutral = true;
+            } else if (balance.balanceEnabled) {
+                if (!mpuReady ||
+                    fabsf(balance.angleDeg) >
+                        Config::BALANCE_ACTIVE_ANGLE_DEG) {
+                    requestNeutralLocked();
+                    balance.fault = true;
+                    forceNeutral = true;
                 } else {
-                    float angleX = motorPid.currentDeg[AXIS_X] - motorPid.setpointDeg[AXIS_X];
-                    float angleY = motorPid.currentDeg[AXIS_Y] - motorPid.setpointDeg[AXIS_Y];
+                    useAutoRamp = true;
+                    balance.filteredGyroRateDps =
+                        Config::GYRO_FILTER_ALPHA * balance.gyroRateDps +
+                        (1.0f - Config::GYRO_FILTER_ALPHA) *
+                            balance.filteredGyroRateDps;
 
-                    motorPid.gyroYfilt = (alpha * motorPid.gyroRateDps[AXIS_Y]) + ((1.0f - alpha) * motorPid.gyroYfilt);
-                    motorPid.gyroZfilt = (alpha * motorPid.gyroRateDps[AXIS_Z]) + ((1.0f - alpha) * motorPid.gyroZfilt);
+                    float errorDeg =
+                        balance.targetAngleDeg - balance.angleDeg;
+                    float command = computeBalancePidLocked(
+                        errorDeg,
+                        balance.filteredGyroRateDps,
+                        dtSec
+                    );
 
-                    float pwmX = (motorPid.k1 * angleX) +
-                                 (motorPid.k2 * motorPid.gyroZfilt) +
-                                 (motorPid.k3 * motorPid.motorSpeedX);
-                    float pwmY = (motorPid.k1 * angleY) +
-                                 (motorPid.k2 * motorPid.gyroYfilt) +
-                                 (motorPid.k3 * motorPid.motorSpeedY);
-
-                    pwmX = constrain(pwmX, -255.0f, 255.0f);
-                    pwmY = constrain(pwmY, -255.0f, 255.0f);
-
-                    if (fabsf(motorPid.k3) > 0.0001f) {
-                        motorPid.motorSpeedX += pwmX;
-                        motorPid.motorSpeedY += pwmY;
-                        motorPid.motorSpeedX = constrain(motorPid.motorSpeedX, -800.0f, 800.0f);
-                        motorPid.motorSpeedY = constrain(motorPid.motorSpeedY, -800.0f, 800.0f);
-                    } else {
-                        motorPid.motorSpeedX = 0.0f;
-                        motorPid.motorSpeedY = 0.0f;
-                    }
-
-                    xyToThreeWay(pwmX, pwmY, escAngle, motorPid.outputLimitDeg, motorPid.minOutputDeg);
-
-                    motorPid.pidOutput[AXIS_X] = pwmX;
-                    motorPid.pidOutput[AXIS_Y] = pwmY;
-                    motorPid.pidOutput[AXIS_Z] = 0.0f;
+                    float directedCommand = constrain(
+                        command * balance.motorDirection,
+                        -Config::COMMAND_LIMIT,
+                        Config::COMMAND_LIMIT
+                    );
+                    requestedEscAngle = commandToEscAngle(
+                        directedCommand,
+                        balance.outputLimitDeg,
+                        balance.minOutputDeg
+                    );
                 }
             } else {
-                for (int axis = 0; axis < AXIS_COUNT; axis++) {
-                    escAngle[axis] = motorPid.manualEscAngle[axis];
-                }
+                requestedEscAngle = balance.manualEscAngle;
+                balance.outputCommand = 0.0f;
             }
 
-            for (int axis = 0; axis < AXIS_COUNT; axis++) {
-                if (!motorPid.motorEnabled[axis]) {
-                    escAngle[axis] = ESC_NEUTRAL;
-                }
-                motorPid.escAngle[axis] = escAngle[axis];
+            if (balance.forceNeutral) {
+                forceNeutral = true;
+                balance.forceNeutral = false;
             }
-            xSemaphoreGive(pidMutex);
+
+            if (forceNeutral) {
+                commandedEscAngle = Config::ESC_NEUTRAL;
+            } else {
+                int rampStep = useAutoRamp
+                    ? Config::ESC_AUTO_RAMP_STEP
+                    : Config::ESC_MANUAL_RAMP_STEP;
+                commandedEscAngle = rampEscAngle(
+                    commandedEscAngle,
+                    requestedEscAngle,
+                    rampStep
+                );
+            }
+            balance.escAngle = commandedEscAngle;
+            xSemaphoreGive(balanceMutex);
         }
 
-        for (int axis = 0; axis < AXIS_COUNT; axis++) {
-            writeEscSafe(axis, escAngle[axis]);
-        }
-        vTaskDelay(pdMS_TO_TICKS(PID_LOOP_MS));
+        writeMotorEsc(commandedEscAngle);
+        // Explicitly block every cycle so CPU 0's idle task can feed the watchdog.
+        vTaskDelay(pdMS_TO_TICKS(Config::CONTROL_LOOP_MS));
     }
 }
 
-void TaskBT(void *pvParameters) {
-    uint32_t lastBtRetry = 0;
+void TaskBluetooth(void *parameter) {
+    bool wasConnected = bluetoothReady && SerialBT.connected();
 
     for (;;) {
+        bool isConnected = bluetoothReady && SerialBT.connected();
+        if (isConnected != wasConnected) {
+            refreshBluetoothConnection();
+            wasConnected = isConnected;
+        }
+
         if (Serial.available() > 0) {
-            String line = Serial.readStringUntil('\n');
-            handleCommand(line);
+            handleCommand(Serial.readStringUntil('\n'));
         }
 
-        if (bluetoothReady && !SerialBT.connected() && millis() - lastBtRetry >= BT_RETRY_MS) {
-            lastBtRetry = millis();
-            tryBluetoothConnect();
-        }
-
-        if (bluetoothReady && SerialBT.connected() && SerialBT.available() > 0) {
-            String line = SerialBT.readStringUntil('\n');
-            handleCommand(line);
+        if (isConnected && SerialBT.available() > 0) {
+            handleCommand(SerialBT.readStringUntil('\n'));
         }
 
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
 
-// void BTconnect() {
-//     Serial.println("Trying Bluetooth connection...");
-//
-//     if (SerialBT.connect(address)) {
-//         digitalWrite(CHECK_LED, LOW);
-//         Serial.println("Bluetooth connected.");
-//     } else {
-//         digitalWrite(CHECK_LED, HIGH);
-//         Serial.println("Bluetooth connection failed. Retrying later.");
-//         vTaskDelay(pdMS_TO_TICKS(2000));
-//     }
-// }
-
 void setup() {
     Serial.begin(115200);
     Serial.setTimeout(50);
     delay(200);
-    Serial.println("\n[1/7] Serial Start");
+    Serial.println("\n[1/6] Starting single-axis balancing cube...");
 
-    pinMode(CHECK_LED, OUTPUT);
-    digitalWrite(CHECK_LED, HIGH);
+    pinMode(Config::CHECK_LED_PIN, OUTPUT);
+    digitalWrite(Config::CHECK_LED_PIN, HIGH);
+
+    ledMutex = xSemaphoreCreateMutex();
+    balanceMutex = xSemaphoreCreateMutex();
+    if (ledMutex == nullptr || balanceMutex == nullptr) {
+        Serial.println("-> Fatal: mutex allocation failed.");
+        while (true) {
+            delay(1000);
+        }
+    }
 
     recoverI2CBus();
-    mpuReady = initMPU6050();
+    mpuReady = initializeMpu();
 
-    Serial.println("[4/7] Creating mutexes and starting hardware...");
-    ledMutex = xSemaphoreCreateMutex();
-    sensorMutex = xSemaphoreCreateMutex();
-    pidMutex = xSemaphoreCreateMutex();
-
+    Serial.println("[4/6] Starting Z motor ESC...");
     ESP32PWM::allocateTimer(1);
-    ESP32PWM::allocateTimer(2);
-    ESP32PWM::allocateTimer(3);
-    for (int axis = 0; axis < AXIS_COUNT; axis++) {
-        motorESC[axis].setPeriodHertz(50);
-        motorESC[axis].attach(motorPins[axis], ESC_MIN_US, ESC_MAX_US);
-        writeEscImmediate(axis, ESC_NEUTRAL);
-    }
+    motorEsc.setPeriodHertz(50);
+    motorEsc.attach(
+        Config::MOTOR_Z_PIN,
+        Config::ESC_MIN_US,
+        Config::ESC_MAX_US
+    );
+    writeMotorEsc(Config::ESC_NEUTRAL);
 
-    Serial.println("[5/7] Starting Bluetooth...");
+    Serial.println("[5/6] Starting Bluetooth and NeoPixel...");
     SerialBT.setTimeout(50);
-    if (SerialBT.begin(btDeviceName, true)) {
-        bluetoothReady = true;
-        printBluetoothStatus();
-        tryBluetoothConnect();
-    } else {
-        bluetoothReady = false;
-        digitalWrite(CHECK_LED, HIGH);
-        Serial.println("-> Bluetooth start failed.");
-    }
+    bluetoothReady = SerialBT.begin(Config::BT_DEVICE_NAME, false);
+    refreshBluetoothConnection();
+    printBluetoothStatus();
 
-    Serial.println("[6/7] Starting NeoPixel...");
     strip.begin();
-    strip.setBrightness(50);
+    strip.setBrightness(100);
     strip.show();
 
-    Serial.println("[7/7] Creating FreeRTOS tasks...");
-    xTaskCreatePinnedToCore(TaskLED, "TaskLED", 4096, NULL, 1, &TaskLEDHandle, 1);
-    delay(100);
-    xTaskCreatePinnedToCore(TaskSensor, "TaskSensor", 4096, NULL, 2, &TaskSensorHandle, 1);
-    delay(100);
-    xTaskCreatePinnedToCore(TaskBT, "TaskBT", 8192, NULL, 1, &TaskBTHandle, 1);
-    delay(100);
-    xTaskCreatePinnedToCore(TaskMotor, "TaskMotor", 4096, NULL, 2, &TaskMotorHandle, 0);
-    delay(100);
+    Serial.println("[6/6] Creating FreeRTOS tasks...");
+    xTaskCreatePinnedToCore(TaskLed, "TaskLed", 4096, NULL, 1, NULL, 1);
+    xTaskCreatePinnedToCore(TaskSensor, "TaskSensor", 4096, NULL, 2, NULL, 1);
+    xTaskCreatePinnedToCore(
+        TaskBluetooth,
+        "TaskBluetooth",
+        8192,
+        NULL,
+        1,
+        NULL,
+        1
+    );
+    xTaskCreatePinnedToCore(TaskMotor, "TaskMotor", 4096, NULL, 3, NULL, 0);
 
-    Serial.println("--- Setup Complete ---");
+    Serial.println("--- Setup complete ---");
     printHelp();
 }
 
