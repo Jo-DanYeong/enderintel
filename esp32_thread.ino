@@ -39,10 +39,10 @@ constexpr float CONTROL_DT_FALLBACK_SEC = CONTROL_LOOP_MS / 1000.0f;
 constexpr float COMPLEMENTARY_ALPHA = 0.98f;
 constexpr float GYRO_FILTER_ALPHA = 0.70f;
 
-constexpr float DEFAULT_KP = 80.0f;
+constexpr float DEFAULT_KP = 60.0f;
 constexpr float DEFAULT_KI = 0.0f;
 constexpr float DEFAULT_KD = 0.0f;
-constexpr float DEFAULT_OUTPUT_LIMIT_DEG = 40.0f;
+constexpr float DEFAULT_OUTPUT_LIMIT_DEG = 30.0f;
 constexpr float DEFAULT_MIN_OUTPUT_DEG = 9.0f;
 constexpr int DEFAULT_MOTOR_DIRECTION = -1;
 
