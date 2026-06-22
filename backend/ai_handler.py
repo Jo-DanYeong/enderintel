@@ -134,11 +134,12 @@ async def process_with_gpt(user_text: str) -> str:
     return final.choices[0].message.content or "������ ó���߾��."
 
 async def text_to_speech_bytes(text: str) -> bytes:
-    """���� ���� ���� mp3 ����Ʈ�� ��ȯ."""
+    """����� ������ wav �������� �����Ͽ� ����� ���̰� ��� ����� �� �ֵ��� �մϴ�."""
     response = await client.audio.speech.create(
         model="tts-1",
         voice=TTS_VOICE,
         input=text,
+        response_format="wav",  # ? �� ���� ������ �߰��ؾ� ��!
     )
     return response.content
  
@@ -147,36 +148,46 @@ async def text_to_speech_bytes(text: str) -> bytes:
 # �� ���� - �ؽ�Ʈ in / �ؽ�Ʈ out
 # ��������������������������������������������������������������������������������������������
 async def handle_text_input(user_text: str) -> dict:
-    """
-    �� ��û ó��. ���� ���� ����.
-    ESP32 ����� ���ο��� BLE�� ó��.
- 
-    Returns:
-        {"user_text": str, "text_reply": str}
-    """
+    import base64
     text_reply = await process_with_gpt(user_text)
-    print(f"?? GPT: {text_reply}")
-    return {"user_text": user_text, "text_reply": text_reply}
+    print(f"GPT: {text_reply}")
+
+    # TTS ���� �߰�
+    tts_response = await client.audio.speech.create(
+        model="tts-1",
+        voice=TTS_VOICE,
+        input=text_reply,
+        response_format="wav"
+    )
+    audio_base64 = base64.b64encode(tts_response.content).decode("utf-8")
+
+    return {
+        "user_text": user_text,
+        "text_reply": text_reply,
+        "audio_bytes": audio_base64
+    }
  
  
 # ��������������������������������������������������������������������������������������������
 # ���� ��ü - ����� in / TTS ����Ʈ out
 # ��������������������������������������������������������������������������������������������
 async def handle_audio_input(audio_path: str) -> dict:
-    """
-    ���� ����ũ �Է� ó��. ���� ���� ����.
-    ����Ŀ ����� pi_local/main.py �� ���.
- 
-    Returns:
-        {"user_text": str, "text_reply": str, "audio_bytes": bytes}
-    """
     user_text = await transcribe_audio(audio_path)
-    print(f"?? STT: {user_text}")
     text_reply = await process_with_gpt(user_text)
-    print(f"?? GPT: {text_reply}")
-    audio_bytes = await text_to_speech_bytes(text_reply)
+    
+    # OpenAI���� TTS ���� �������� (WAV ���� ����)
+    raw_audio_bytes = await client.audio.speech.create(
+        model="tts-1",
+        voice=TTS_VOICE,
+        input=text_reply,
+        response_format="wav"
+    )
+    
+    # ? �ٽ�: ���̳ʸ��� ���ڿ��� �����ϰ� �����ϱ�
+    audio_base64 = base64.b64encode(raw_audio_bytes.content).decode('utf-8')
+    
     return {
         "user_text": user_text,
         "text_reply": text_reply,
-        "audio_bytes": audio_bytes,
+        "audio_bytes": audio_base64,  # ���� �����ϰ� ���޵�!
     }
