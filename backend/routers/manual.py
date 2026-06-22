@@ -28,7 +28,26 @@ class CubeRequest(BaseModel):
 
 @router.get("/connection", summary="ESP32 Bluetooth connection state")
 async def manual_connection():
-    return JSONResponse(content={"connected": rfcomm_bridge.is_connected()})
+    result = await asyncio.to_thread(rfcomm_bridge.request_state)
+    is_live = bool(result.get("success"))
+    return JSONResponse(
+        content={"connected": is_live, "esp_on": is_live, "power": is_live}
+    )
+
+
+@router.get("/state", summary="Current ESP32 application state")
+async def manual_state():
+    """Return live LED, PID, motor, and angle values from the ESP32."""
+    result = await asyncio.to_thread(rfcomm_bridge.request_state)
+    is_live = bool(result.get("success"))
+    content = {
+        "connected": is_live,
+        "esp_on": is_live,
+        "power": is_live,
+    }
+    if is_live:
+        content.update(result.get("state", {}))
+    return JSONResponse(content=content)
 
 
 @router.post("/light", summary="���� ���� ����")
