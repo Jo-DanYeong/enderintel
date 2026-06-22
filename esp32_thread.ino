@@ -36,18 +36,24 @@ constexpr uint32_t ESC_ARM_TIME_MS = 5000;
 constexpr uint32_t SENSOR_LOOP_MS = 10;
 constexpr uint32_t CONTROL_LOOP_MS = 20;
 constexpr float CONTROL_DT_FALLBACK_SEC = CONTROL_LOOP_MS / 1000.0f;
-constexpr float COMPLEMENTARY_ALPHA = 0.98f;
-constexpr float GYRO_FILTER_ALPHA = 0.70f;
+constexpr float COMPLEMENTARY_FILTER_TAU_SEC = 0.49f;
+constexpr float GYRO_FILTER_TAU_SEC = 0.01f;
+constexpr uint32_t SENSOR_STALE_TIMEOUT_US = 100000;
+constexpr float ACCEL_TRUST_MIN_G = 0.80f;
+constexpr float ACCEL_TRUST_MAX_G = 1.20f;
+constexpr float ACCEL_ANGLE_INNOVATION_LIMIT_DEG = 6.0f;
+constexpr float GYRO_SPIKE_DIFFERENCE_DPS = 25.0f;
 
-constexpr float DEFAULT_KP = 60.0f;
-constexpr float DEFAULT_KI = 0.0f;
-constexpr float DEFAULT_KD = 0.0f;
-constexpr float DEFAULT_OUTPUT_LIMIT_DEG = 30.0f;
-constexpr float DEFAULT_MIN_OUTPUT_DEG = 9.0f;
+constexpr float DEFAULT_KP = 35.0f;
+constexpr float DEFAULT_KI = 15.0f;
+constexpr float DEFAULT_KD = 40.0f;
+constexpr float DEFAULT_OUTPUT_LIMIT_DEG = 40.0f;
+constexpr float DEFAULT_MIN_OUTPUT_DEG = 5.0f;
 constexpr int DEFAULT_MOTOR_DIRECTION = -1;
 
 constexpr float COMMAND_LIMIT = 255.0f;
-constexpr float MOTOR_DEADBAND = 2.0f;
+constexpr float ANGLE_DEADBAND_DEG = 0.35f;
+constexpr float GYRO_DEADBAND_DPS = 1.5f;
 constexpr float INTEGRAL_OUTPUT_LIMIT = 60.0f;
 constexpr float INTEGRAL_ACTIVE_ANGLE_DEG = 5.0f;
 constexpr float BALANCE_ACTIVE_ANGLE_DEG = 20.0f;
@@ -68,10 +74,12 @@ struct BalanceState {
     float angleOffsetDeg = 0.0f;
     float gyroRateDps = 0.0f;
     float filteredGyroRateDps = 0.0f;
+    float accelNormG = 1.0f;
     float proportionalTerm = 0.0f;
     float integralTerm = 0.0f;
     float derivativeTerm = 0.0f;
     float outputCommand = 0.0f;
+    float saturationTimeSec = 0.0f;
 
     float outputLimitDeg = Config::DEFAULT_OUTPUT_LIMIT_DEG;
     float minOutputDeg = Config::DEFAULT_MIN_OUTPUT_DEG;
@@ -79,11 +87,15 @@ struct BalanceState {
     int motorDirection = Config::DEFAULT_MOTOR_DIRECTION;
     int manualEscAngle = Config::ESC_NEUTRAL;
     int escAngle = Config::ESC_NEUTRAL;
+    uint32_t sensorUpdateMicros = 0;
+    uint32_t gyroSpikeCount = 0;
 
     bool balanceEnabled = false;
     bool motorEnabled = true;
     bool fault = false;
     bool forceNeutral = true;
+    bool outputSaturated = false;
+    bool accelTrusted = true;
 };
 
 Adafruit_NeoPixel strip(
@@ -111,6 +123,10 @@ static int clampEscAngle(int angle) {
     return constrain(angle, Config::ESC_MIN_ANGLE, Config::ESC_MAX_ANGLE);
 }
 
+static float medianOfThree(float a, float b, float c) {
+    return max(min(a, b), min(max(a, b), c));
+}
+
 static float elapsedSeconds(uint32_t *lastMicros, float fallbackSec) {
     uint32_t nowMicros = micros();
     float dtSec = (nowMicros - *lastMicros) / 1000000.0f;
@@ -128,6 +144,8 @@ static void resetControllerLocked() {
     balance.integralTerm = 0.0f;
     balance.derivativeTerm = 0.0f;
     balance.outputCommand = 0.0f;
+    balance.saturationTimeSec = 0.0f;
+    balance.outputSaturated = false;
 }
 
 static void requestNeutralLocked() {
@@ -155,16 +173,18 @@ static int commandToEscAngle(
     float minOutputDeg
 ) {
     command = constrain(command, -Config::COMMAND_LIMIT, Config::COMMAND_LIMIT);
-    if (fabsf(command) < Config::MOTOR_DEADBAND) {
+    if (fabsf(command) < 0.5f) {
         return Config::ESC_NEUTRAL;
     }
 
     outputLimitDeg = constrain(outputLimitDeg, 0.0f, 90.0f);
     minOutputDeg = constrain(minOutputDeg, 0.0f, outputLimitDeg);
-
-    float offsetDeg = (command / Config::COMMAND_LIMIT) * outputLimitDeg;
+    float offsetDeg =
+        (command / Config::COMMAND_LIMIT) * outputLimitDeg;
     if (fabsf(offsetDeg) < minOutputDeg) {
-        offsetDeg = (offsetDeg > 0.0f) ? minOutputDeg : -minOutputDeg;
+        offsetDeg = (offsetDeg > 0.0f)
+            ? minOutputDeg
+            : -minOutputDeg;
     }
 
     return clampEscAngle(
@@ -266,6 +286,10 @@ static bool initializeMpu() {
         Serial.println("-> MPU6050 connection test failed.");
         return false;
     }
+
+    // MPU6050 register value 3 enables its internal ~42 Hz gyro DLPF.
+    mpu.setDLPFMode(3);
+    mpu.setRate(9);  // 1 kHz / (1 + 9) = 100 Hz sample rate.
 
     if (Config::RUN_BOOT_CALIBRATION) {
         Serial.println("-> Calibrating MPU6050. Keep the cube still...");
@@ -415,7 +439,7 @@ static void printHelp() {
     Serial.println("  DISABLE Z          disable Z motor and force neutral");
     Serial.println("  TARGET deg         set target (-15..15) and start balance");
     Serial.println("  PID Kp Ki Kd       set angle PID gains");
-    Serial.println("  OUT limit min      set ESC offsets from neutral (0..90)");
+    Serial.println("  OUT limit min      set bidirectional correction and minimum offset");
     Serial.println("  DIR Z 1|-1         set Z motor direction, then stop");
     Serial.println("  BALANCE ON|OFF     start or stop balancing");
     Serial.println("  ZERO               stop and zero the current X angle");
@@ -455,19 +479,32 @@ static BalanceState getBalanceSnapshot() {
 
 static void printStatus() {
     BalanceState state = getBalanceSnapshot();
+    uint32_t sensorAgeMs = state.sensorUpdateMicros == 0
+        ? UINT32_MAX
+        : (micros() - state.sensorUpdateMicros) / 1000;
+    float correctionLimitDeg = constrain(state.outputLimitDeg, 0.0f, 90.0f);
+    float autoMinPwm = Config::ESC_NEUTRAL - correctionLimitDeg;
+    float autoMaxPwm = Config::ESC_NEUTRAL + correctionLimitDeg;
     Serial.printf(
-        "-> [STATUS] mpu=%s mode=%s fault=%s sensor=X motor=Z enabled=%d\n",
+        "-> [STATUS] mpu=%s mode=%s control=BIDIRECTIONAL fault=%s enabled=%d\n",
         mpuReady ? "READY" : "NOT_READY",
         state.balanceEnabled ? "BALANCE" : "MANUAL",
         state.fault ? "YES" : "NO",
         state.motorEnabled ? 1 : 0
     );
     Serial.printf(
-        "   angle=%.2f target=%.2f gyro=%.2f offset=%.2f\n",
+        "   angle=%.2f target=%.2f gyro=%.2f offset=%.2f sensorAge=%lums\n",
         state.angleDeg,
         state.targetAngleDeg,
         state.gyroRateDps,
-        state.angleOffsetDeg
+        state.angleOffsetDeg,
+        static_cast<unsigned long>(sensorAgeMs)
+    );
+    Serial.printf(
+        "   accel=%.3fg trusted=%d gyroSpikes=%lu\n",
+        state.accelNormG,
+        state.accelTrusted ? 1 : 0,
+        static_cast<unsigned long>(state.gyroSpikeCount)
     );
     Serial.printf(
         "   Kp=%.3f Ki=%.3f Kd=%.3f P=%.2f I=%.2f D=%.2f command=%.2f\n",
@@ -480,11 +517,19 @@ static void printStatus() {
         state.outputCommand
     );
     Serial.printf(
-        "   outLimit=%.1f minOut=%.1f dir=%d pwm=%d\n",
+        "   outRequest=%.1f correction=%.1f minOffset=%.1f\n",
         state.outputLimitDeg,
-        state.minOutputDeg,
+        correctionLimitDeg,
+        state.minOutputDeg
+    );
+    Serial.printf(
+        "   autoPwm=%.0f - 90 - %.0f dir=%d pwm=%d saturated=%d time=%.2fs\n",
+        autoMinPwm,
+        autoMaxPwm,
         state.motorDirection,
-        state.escAngle
+        state.escAngle,
+        state.outputSaturated ? 1 : 0,
+        state.saturationTimeSec
     );
 }
 
@@ -745,6 +790,9 @@ void TaskSensor(void *parameter) {
     uint32_t lastMicros = micros();
     float filteredAngleDeg = 0.0f;
     bool filterInitialized = false;
+    float previousGyroRateDps = 0.0f;
+    float olderGyroRateDps = 0.0f;
+    uint8_t gyroHistoryCount = 0;
 
     for (;;) {
         if (!mpuReady) {
@@ -762,21 +810,60 @@ void TaskSensor(void *parameter) {
         float accelAngleXDeg =
             atan2f(static_cast<float>(ay), static_cast<float>(az)) *
             RAD_TO_DEG;
-        float gyroRateXDps = gx / 131.0f;
+        float rawGyroRateXDps = gx / 131.0f;
+        float gyroRateXDps = rawGyroRateXDps;
+        bool gyroSpikeRejected = false;
+        if (gyroHistoryCount >= 2) {
+            gyroRateXDps = medianOfThree(
+                rawGyroRateXDps,
+                previousGyroRateDps,
+                olderGyroRateDps
+            );
+            gyroSpikeRejected =
+                fabsf(rawGyroRateXDps - gyroRateXDps) >=
+                Config::GYRO_SPIKE_DIFFERENCE_DPS;
+        } else {
+            gyroHistoryCount++;
+        }
+        olderGyroRateDps = previousGyroRateDps;
+        previousGyroRateDps = rawGyroRateXDps;
+
+        float accelXG = ax / 16384.0f;
+        float accelYG = ay / 16384.0f;
+        float accelZG = az / 16384.0f;
+        float accelNormG = sqrtf(
+            accelXG * accelXG + accelYG * accelYG + accelZG * accelZG
+        );
 
         if (xSemaphoreTake(balanceMutex, pdMS_TO_TICKS(5))) {
             if (!filterInitialized) {
                 filteredAngleDeg = accelAngleXDeg;
                 filterInitialized = true;
             } else {
-                filteredAngleDeg =
-                    Config::COMPLEMENTARY_ALPHA *
-                        (filteredAngleDeg + gyroRateXDps * dtSec) +
-                    (1.0f - Config::COMPLEMENTARY_ALPHA) * accelAngleXDeg;
+                float gyroPredictedAngleDeg =
+                    filteredAngleDeg + gyroRateXDps * dtSec;
+                bool accelTrusted =
+                    accelNormG >= Config::ACCEL_TRUST_MIN_G &&
+                    accelNormG <= Config::ACCEL_TRUST_MAX_G &&
+                    fabsf(accelAngleXDeg - gyroPredictedAngleDeg) <=
+                        Config::ACCEL_ANGLE_INNOVATION_LIMIT_DEG;
+                float complementaryAlpha =
+                    Config::COMPLEMENTARY_FILTER_TAU_SEC /
+                    (Config::COMPLEMENTARY_FILTER_TAU_SEC + dtSec);
+                filteredAngleDeg = accelTrusted
+                    ? complementaryAlpha * gyroPredictedAngleDeg +
+                          (1.0f - complementaryAlpha) * accelAngleXDeg
+                    : gyroPredictedAngleDeg;
+                balance.accelTrusted = accelTrusted;
             }
 
             balance.angleDeg = filteredAngleDeg - balance.angleOffsetDeg;
             balance.gyroRateDps = gyroRateXDps;
+            balance.accelNormG = accelNormG;
+            if (gyroSpikeRejected) {
+                balance.gyroSpikeCount++;
+            }
+            balance.sensorUpdateMicros = micros();
             xSemaphoreGive(balanceMutex);
         }
 
@@ -805,11 +892,15 @@ void TaskMotor(void *parameter) {
         bool forceNeutral = false;
 
         if (xSemaphoreTake(balanceMutex, pdMS_TO_TICKS(10))) {
+            uint32_t sensorAgeUs = micros() - balance.sensorUpdateMicros;
+            bool sensorStale =
+                balance.sensorUpdateMicros == 0 ||
+                sensorAgeUs > Config::SENSOR_STALE_TIMEOUT_US;
             if (!balance.motorEnabled) {
                 requestNeutralLocked();
                 forceNeutral = true;
             } else if (balance.balanceEnabled) {
-                if (!mpuReady ||
+                if (!mpuReady || sensorStale ||
                     fabsf(balance.angleDeg) >
                         Config::BALANCE_ACTIVE_ANGLE_DEG) {
                     requestNeutralLocked();
@@ -817,18 +908,42 @@ void TaskMotor(void *parameter) {
                     forceNeutral = true;
                 } else {
                     useAutoRamp = true;
-                    balance.filteredGyroRateDps =
-                        Config::GYRO_FILTER_ALPHA * balance.gyroRateDps +
-                        (1.0f - Config::GYRO_FILTER_ALPHA) *
-                            balance.filteredGyroRateDps;
+                    float gyroAlpha = dtSec /
+                        (Config::GYRO_FILTER_TAU_SEC + dtSec);
+                    balance.filteredGyroRateDps +=
+                        gyroAlpha *
+                        (balance.gyroRateDps -
+                         balance.filteredGyroRateDps);
 
                     float errorDeg =
                         balance.targetAngleDeg - balance.angleDeg;
-                    float command = computeBalancePidLocked(
-                        errorDeg,
-                        balance.filteredGyroRateDps,
-                        dtSec
-                    );
+                    float command = 0.0f;
+                    bool nearUpright =
+                        fabsf(errorDeg) <= Config::ANGLE_DEADBAND_DEG &&
+                        fabsf(balance.filteredGyroRateDps) <=
+                            Config::GYRO_DEADBAND_DPS;
+                    if (nearUpright) {
+                        balance.proportionalTerm = 0.0f;
+                        balance.integralTerm = 0.0f;
+                        balance.derivativeTerm = 0.0f;
+                        balance.outputCommand = 0.0f;
+                        balance.outputSaturated = false;
+                        balance.saturationTimeSec = 0.0f;
+                    } else {
+                        command = computeBalancePidLocked(
+                            errorDeg,
+                            balance.filteredGyroRateDps,
+                            dtSec
+                        );
+                        balance.outputSaturated =
+                            fabsf(command) >=
+                            (Config::COMMAND_LIMIT - 0.5f);
+                        if (balance.outputSaturated) {
+                            balance.saturationTimeSec += dtSec;
+                        } else {
+                            balance.saturationTimeSec = 0.0f;
+                        }
+                    }
 
                     float directedCommand = constrain(
                         command * balance.motorDirection,
@@ -844,6 +959,8 @@ void TaskMotor(void *parameter) {
             } else {
                 requestedEscAngle = balance.manualEscAngle;
                 balance.outputCommand = 0.0f;
+                balance.outputSaturated = false;
+                balance.saturationTimeSec = 0.0f;
             }
 
             if (balance.forceNeutral) {
